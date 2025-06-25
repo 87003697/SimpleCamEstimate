@@ -99,7 +99,7 @@ class DUSt3RHelper:
                 # 最后回退到默认模式
                 scene = global_aligner(output, device=self.device)
         
-        loss = scene.compute_global_alignment(niter=300, lr=0.01)
+        loss = scene.compute_global_alignment(niter=1000, lr=0.01)
         
         # 5. 提取结果
         point_clouds = scene.get_pts3d()

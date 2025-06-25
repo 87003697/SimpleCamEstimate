@@ -429,15 +429,23 @@ class CleanV2M4CameraSearch:
         self.dust3r_model_path = dust3r_model_path
         self.enable_visualization = enable_visualization
         
-        # 简化配置：只保留核心参数
+        # 优化后的配置参数 - 基于性能测试最优值
         self.config = {
-            'initial_samples': 2000,      # 初始采样数
-            'top_n': 7,                   # DUSt3R候选数
-            'pso_particles': 50,          # PSO粒子数
-            'pso_iterations': 20,         # PSO迭代数
-            'grad_iterations': 100,       # 梯度下降迭代数
+            'initial_samples': 128,       # 初始采样数 (海选阶段) - 调整: 2000→500→128
+            'top_n': 7,                   # DUSt3R候选数 (几何解密)
+            'pso_particles': 80,          # PSO粒子数 (全局优化) - 优化: 50→80
+            'pso_iterations': 20,         # PSO迭代数 (全局优化)
+            'grad_iterations': 200,       # 梯度下降迭代数 (精细调整) - 优化: 100→200
             'image_size': 512,            # 图像尺寸
-            'render_batch_size': 128       # 批量渲染大小 (可调整以平衡速度和内存)
+            'render_batch_size': 16,      # 批量渲染大小 - 平衡性能和内存 (4-128可调)
+            
+            # 新增的优化参数
+            'dust3r_alignment_iterations': 1000,  # DUSt3R对齐迭代数 - 优化: 300→1000
+            'pso_w': 0.6,                        # PSO惯性权重 - 优化: 0.7→0.6
+            'pso_c1': 1.0,                       # PSO个体学习因子 - 优化: 1.5→1.0
+            'top_k_for_pso': 100,                # PSO选择的top-k候选
+            'point_cloud_sample_ratio': 0.05,    # 点云采样比例
+            'min_confidence': 0.3                # 最小置信度阈值
         }
         
         # 延迟初始化组件
@@ -473,7 +481,14 @@ class CleanV2M4CameraSearch:
         """延迟初始化优化器"""
         if self._optimizer is None:
             from .optimizer import PSO_GD_Optimizer
-            self._optimizer = PSO_GD_Optimizer()
+            # 传递优化后的配置参数
+            self._optimizer = PSO_GD_Optimizer(
+                pso_particles=self.config['pso_particles'],
+                pso_iterations=self.config['pso_iterations'],
+                pso_w=self.config['pso_w'],
+                pso_c1=self.config['pso_c1'],
+                grad_iterations=self.config['grad_iterations']
+            )
         return self._optimizer
     
     @property

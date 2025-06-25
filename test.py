@@ -123,7 +123,7 @@ def test_visualization_components():
             rendered_result=rendered_result,
             final_pose=test_pose,
             mesh_info={'vertices_count': 1000, 'faces_count': 2000, 'scale': 1.5},
-            algorithm_stats={'initial_samples': 2000, 'top_n': 7, 'final_score': 0.85},
+            algorithm_stats={'initial_samples': 128, 'top_n': 7, 'final_score': 0.85},
             execution_time=120.5
         )
         print(f"   ✅ 结果对比图: {Path(comparison_path).name}")
