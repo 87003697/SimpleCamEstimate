@@ -33,46 +33,64 @@ class VGGTHelper:
             dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
             self.dtype = dtype
             
-            # 从HuggingFace加载预训练模型 - 使用正确的方式
             print("🔄 正在加载VGGT模型...")
             
-            # 方法1: 尝试使用trust_remote_code直接加载
-            try:
-                from huggingface_hub import hf_hub_download
-                
-                # 下载模型文件
-                model_path = hf_hub_download(
-                    repo_id="facebook/VGGT-1B",
-                    filename="pytorch_model.bin",
-                    cache_dir=".cache/huggingface"
-                )
-                
-                # 使用本地VGGT类加载
-                from .vggt import VGGT
-                self.model = VGGT()
-                
-                # 加载权重
-                state_dict = torch.load(model_path, map_location='cpu')
-                self.model.load_state_dict(state_dict)
-                self.model = self.model.to(self.device)
-                
-                print("✅ VGGT模型加载成功")
-                self.is_loaded = True
-                return
-                
-            except Exception as e1:
-                print(f"⚠️ 方法1失败: {e1}")
-                
-            # 方法2: 尝试使用PyTorchModelHubMixin
+            # 方法1: 使用PyTorchModelHubMixin直接加载 (V2M4的方式)
             try:
                 from .vggt import VGGT
+                print("   尝试使用PyTorchModelHubMixin加载...")
                 self.model = VGGT.from_pretrained("facebook/VGGT-1B").to(self.device)
                 print("✅ VGGT模型加载成功")
                 self.is_loaded = True
                 return
                 
+            except Exception as e1:
+                print(f"⚠️ PyTorchModelHubMixin加载失败: {e1}")
+                
+            # 方法2: 手动加载safetensors文件
+            try:
+                import safetensors.torch
+                from huggingface_hub import hf_hub_download
+                
+                print("   尝试手动加载safetensors...")
+                
+                # 下载模型文件
+                model_path = hf_hub_download(
+                    repo_id="facebook/VGGT-1B",
+                    filename="model.safetensors",
+                    cache_dir="/home/zhiyuan_ma/.cache/huggingface"
+                )
+                
+                config_path = hf_hub_download(
+                    repo_id="facebook/VGGT-1B", 
+                    filename="config.json",
+                    cache_dir="/home/zhiyuan_ma/.cache/huggingface"
+                )
+                
+                # 读取配置
+                import json
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                
+                # 创建模型
+                from .vggt import VGGT
+                self.model = VGGT(
+                    img_size=config.get('img_size', 518),
+                    patch_size=config.get('patch_size', 14), 
+                    embed_dim=config.get('embed_dim', 1024)
+                )
+                
+                # 加载权重
+                state_dict = safetensors.torch.load_file(model_path)
+                self.model.load_state_dict(state_dict)
+                self.model = self.model.to(self.device)
+                
+                print("✅ VGGT模型手动加载成功")
+                self.is_loaded = True
+                return
+                
             except Exception as e2:
-                print(f"⚠️ 方法2失败: {e2}")
+                print(f"⚠️ 手动加载safetensors失败: {e2}")
                 
             # 方法3: 创建空模型用于测试
             print("⚠️ 创建空VGGT模型用于测试...")
