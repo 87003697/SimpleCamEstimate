@@ -9,6 +9,7 @@
 - ✅ 模块化设计 (1个文件 → 5个模块)
 - ✅ 完整V2M4算法9步流程保留
 - ✅ DUSt3R核心功能零损失
+- ✅ 新增VGGT模型支持，双模型切换 🆕
 - ✅ 新增完整可视化支持
 - ✅ nvdiffrast渲染稳定性问题解决
 - ✅ 统一测试脚本，避免代码重复 🆕
@@ -50,6 +51,8 @@ SimpleCamEstimate/
 │   ├── __init__.py                 # 包初始化和主要接口 (180行)
 │   ├── core.py                     # 核心算法 + 数据结构 + 渲染器 (650行)
 │   ├── dust3r_helper.py            # DUSt3R简化封装 (143行)
+│   ├── vggt.py                     # VGGT模型实现 🆕
+│   ├── vggt_helper.py              # VGGT助手类 🆕
 │   ├── optimizer.py                # PSO + 梯度下降 (206行)
 │   ├── utils.py                    # 工具函数 (51行)
 │   └── visualization.py            # 可视化模块 (350行)
@@ -128,6 +131,9 @@ python test.py --scenes 25         # 测试所有25个场景
 # 单场景深度测试
 python test.py --single-scene "1"  # 测试场景"1"
 python test.py --single-scene "dancing_spiderman"
+# VGGT模型测试 🆕
+python test.py --single-scene "dancing_spiderman" --use-vggt
+python test.py --scenes 5 --use-vggt         # VGGT批量测试
 
 # 性能优化选项
 python test.py --no-visualization  # 禁用可视化，提升速度
@@ -179,6 +185,14 @@ best_pose = search_camera_pose(
     dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
     scene_name="dancing_spiderman", 
     render_batch_size=4,             # 更小批量，避免OOM
+n### 模型切换 ��
+```python
+config = {
+    'use_vggt': False,            # False=DUSt3R, True=VGGT
+    'model_name': 'dust3r',       # 当前模型名称
+    # ... 其他配置
+}
+```
     enable_visualization=True
 )
 
@@ -186,6 +200,13 @@ print(f"最佳相机姿态:")
 print(f"  仰角: {best_pose.elevation:.2f}°")
 print(f"  方位角: {best_pose.azimuth:.2f}°") 
 print(f"  距离: {best_pose.radius:.2f}")
+
+# 🆕 使用VGGT模型
+best_pose = search_camera_pose(
+    dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
+    scene_name="dancing_spiderman",
+    use_vggt=True                    # 切换到VGGT模型
+)
 ```
 
 ### 4. 批量处理
@@ -475,6 +496,7 @@ print(f"算法统计: {searcher.visualization_data['algorithm_stats']}")
 - **生产就绪**: 可直接用于相机姿态估计任务
 - **教学友好**: 清晰代码结构便于学习理解
 - **扩展性强**: 模块化设计支持功能扩展
+- **VGGT集成**: 双模型架构，运行时切换 🆕
 
 **项目已完成并可投入使用！** 🎉
 
