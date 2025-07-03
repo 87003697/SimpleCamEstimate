@@ -459,6 +459,12 @@ class CleanV2M4CameraSearch:
         self._optimizer = None
         self._visualizer = None
         
+        # 根据配置更新模型名称
+        if self.config['use_vggt']:
+            self.config['model_name'] = 'vggt'
+        else:
+            self.config['model_name'] = 'dust3r'
+        
         # 可视化数据收集
         self.visualization_data = {
             'progression': [],
