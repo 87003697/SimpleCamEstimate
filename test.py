@@ -176,7 +176,7 @@ def test_single_scene(scene_name: str, enable_visualization: bool = True, device
         
         # 创建搜索器
         searcher = CleanV2M4CameraSearch(
-            dust3r_model_path="naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
+            dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
             device=device,
             enable_visualization=enable_visualization
         )
