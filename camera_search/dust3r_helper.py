@@ -87,18 +87,8 @@ class DUSt3RHelper:
         pairs = make_pairs(processed_images, scene_graph='complete', symmetrize=True)
         output = inference(pairs, self.model, self.device, batch_size=1)
         
-        # 4. 全局对齐 - 修复模式名称
-        try:
-            # 首先尝试使用PointCloudOptim
-            scene = global_aligner(output, device=self.device, mode='pointcloud')
-        except:
-            try:
-                # 如果失败，尝试使用其他模式
-                scene = global_aligner(output, device=self.device, mode='pointcloud_optim')
-            except:
-                # 最后回退到默认模式
-                scene = global_aligner(output, device=self.device)
-        
+        # 4. 全局对齐 - 使用默认的PointCloudOptimizer模式
+        scene = global_aligner(output, device=self.device)
         loss = scene.compute_global_alignment(niter=1000, lr=0.01)
         
         # 5. 提取结果
