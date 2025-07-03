@@ -41,7 +41,13 @@ class VGGTSimplified(nn.Module, PyTorchModelHubMixin):
         dummy_features = []
         for i in range(S):
             feat = self.dummy_conv(images[0, i])  # [3, H, W] -> [64, H, W]
-            feat = torch.mean(feat, dim=[2, 3])   # [64]
+            # 检查feat的维度并正确计算平均值
+            if feat.dim() == 3:  # [64, H, W]
+                feat = torch.mean(feat, dim=[1, 2])   # [64]
+            elif feat.dim() == 4:  # [1, 64, H, W]
+                feat = torch.mean(feat, dim=[2, 3]).squeeze(0)   # [64]
+            else:
+                feat = torch.mean(feat.view(feat.shape[0], -1), dim=1)  # 安全的平均值计算
             dummy_features.append(feat)
         
         dummy_features = torch.stack(dummy_features)  # [S, 64]

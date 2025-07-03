@@ -160,22 +160,39 @@ def test_visualization_components():
         print(f"   ❌ 可视化组件测试失败: {e}")
         return False
 
-def test_single_scene(scene_name: str, enable_visualization: bool = True, device: str = "cuda") -> Optional[Dict]:
+def test_single_scene(scene_name: str, enable_visualization: bool = True, device: str = "cuda", use_vggt: bool = False) -> Optional[Dict]:
     """测试单个场景的完整V2M4算法"""
-    print(f"🎬 测试场景: {scene_name}")
+    model_name = "VGGT" if use_vggt else "DUSt3R"
+    print(f"🎬 测试场景: {scene_name} (使用{model_name})")
     
     try:
-        from camera_search import search_camera_pose
+        from camera_search.core import CleanV2M4CameraSearch, DataPair
+        
+        # 创建数据对
+        data_pair = DataPair.from_scene_name(scene_name)
+        if not data_pair.exists():
+            print(f"   ❌ 场景数据不存在: {scene_name}")
+            return None
+        
+        # 创建搜索器
+        searcher = CleanV2M4CameraSearch(
+            dust3r_model_path="naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
+            device=device,
+            enable_visualization=enable_visualization
+        )
+        
+        # 配置模型
+        if use_vggt:
+            searcher.config['use_vggt'] = True
+            searcher.config['model_name'] = 'vggt'
+            print(f"   🔄 切换到VGGT模式")
         
         # 运行完整的V2M4算法
         start_time = time.time()
         
-        best_pose = search_camera_pose(
-            dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
-            scene_name=scene_name,
-            enable_visualization=enable_visualization,
-            save_visualization=enable_visualization,
-            device=device
+        best_pose = searcher.search_camera_pose(
+            data_pair=data_pair,
+            save_visualization=enable_visualization
         )
         
         elapsed = time.time() - start_time
@@ -185,11 +202,13 @@ def test_single_scene(scene_name: str, enable_visualization: bool = True, device
                 'scene_name': scene_name,
                 'pose': best_pose,
                 'execution_time': elapsed,
-                'success': True
+                'success': True,
+                'model': model_name
             }
             
             print(f"   ✅ 成功! 姿态: 仰角={best_pose.elevation:.1f}°, 方位角={best_pose.azimuth:.1f}°, 距离={best_pose.radius:.2f}")
             print(f"   ⏱️ 耗时: {elapsed:.1f}秒")
+            print(f"   🤖 模型: {model_name}")
             
             if enable_visualization:
                 # 检查可视化文件
@@ -205,7 +224,8 @@ def test_single_scene(scene_name: str, enable_visualization: bool = True, device
                 'scene_name': scene_name,
                 'pose': None,
                 'execution_time': elapsed,
-                'success': False
+                'success': False,
+                'model': model_name
             }
             
     except Exception as e:
@@ -215,25 +235,30 @@ def test_single_scene(scene_name: str, enable_visualization: bool = True, device
             'pose': None,
             'execution_time': 0,
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'model': model_name
         }
 
 def test_multiple_scenes(
     num_scenes: int = 3, 
     enable_visualization: bool = True,
     create_batch_summary: bool = True,
-    device: str = "cuda"
+    device: str = "cuda",
+    use_vggt: bool = False
 ) -> Dict:
     """测试多个场景的批量处理"""
-    print(f"\n🔄 批量测试 {num_scenes} 个场景...")
+    model_name = "VGGT" if use_vggt else "DUSt3R"
+    print(f"\n🔄 批量测试 {num_scenes} 个场景 (使用{model_name})...")
     print(f"   🎨 可视化: {'启用' if enable_visualization else '禁用'}")
     print(f"   📋 批量总结: {'启用' if create_batch_summary else '禁用'}")
     
     try:
-        from camera_search import discover_available_scenes
+        from camera_search.core import DataManager
         
         # 发现可用场景
-        available_scenes = discover_available_scenes()
+        data_manager = DataManager()
+        available_data_pairs = data_manager.discover_data_pairs()
+        available_scenes = [dp.scene_name for dp in available_data_pairs]
         print(f"   📁 发现场景: {len(available_scenes)}个")
         
         # 选择测试场景
@@ -254,10 +279,11 @@ def test_multiple_scenes(
             result = test_single_scene(
                 scene_name=scene,
                 enable_visualization=scene_visualization,
-                device=device
+                device=device,
+                use_vggt=use_vggt
             )
             
-            if result:
+            if result and result['success']:
                 results[scene] = result['pose']
                 execution_times[scene] = result['execution_time']
             else:
@@ -325,6 +351,8 @@ def main():
                        help='测试可视化组件 (使用模拟数据)')
     parser.add_argument('--single-scene', type=str,
                        help='只测试指定场景')
+    parser.add_argument('--use-vggt', action='store_true',
+                       help='使用VGGT模型进行测试')
     
     args = parser.parse_args()
     
@@ -354,7 +382,8 @@ def main():
         result = test_single_scene(
             scene_name=args.single_scene,
             enable_visualization=not args.no_visualization,
-            device=args.device
+            device=args.device,
+            use_vggt=args.use_vggt
         )
         test_results.append(result['success'] if result else False)
     else:
@@ -363,7 +392,8 @@ def main():
             num_scenes=args.scenes,
             enable_visualization=not args.no_visualization,
             create_batch_summary=not args.no_batch_summary,
-            device=args.device
+            device=args.device,
+            use_vggt=args.use_vggt
         )
         test_results.append(batch_result['success_rate'] > 0)
     
@@ -385,10 +415,12 @@ def main():
                 print(f"   位置: {output_dir}")
         
         print(f"\n💡 使用示例:")
-        print(f"   python test.py --scenes 5          # 测试5个场景")
-        print(f"   python test.py --single-scene '1'  # 测试单个场景")
-        print(f"   python test.py --no-visualization  # 禁用可视化")
-        print(f"   python test.py --scenes 25         # 测试所有场景")
+        print(f"   python test.py --scenes 5                    # 测试5个场景")
+        print(f"   python test.py --single-scene 'dancing_spiderman'  # 测试单个场景")
+        print(f"   python test.py --single-scene 'dancing_spiderman' --use-vggt  # 使用VGGT测试")
+        print(f"   python test.py --no-visualization            # 禁用可视化")
+        print(f"   python test.py --scenes 25                   # 测试所有场景")
+        print(f"   python test.py --scenes 5 --use-vggt         # 使用VGGT批量测试")
         
     else:
         print(f"⚠️ 部分测试失败: {passed_tests}/{total_tests}")

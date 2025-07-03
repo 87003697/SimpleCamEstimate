@@ -105,8 +105,14 @@ class VGGTHelper:
             self.is_loaded = False
         
     def _preprocess_images(self, images: List[np.ndarray]) -> torch.Tensor:
-        """预处理图像 - 转换为VGGT格式"""
+        """预处理图像 - 转换为VGGT格式 (参考V2M4实现)"""
         processed_images = []
+        
+        # VGGT的标准输入尺寸
+        target_size = 518  # 根据config.json中的img_size
+        
+        # 首先收集所有图像的尺寸信息
+        shapes = set()
         
         for img in images:
             # 确保图像是RGB格式
@@ -119,7 +125,61 @@ class VGGTHelper:
                 
                 # 调整维度顺序: HWC -> CHW
                 img_tensor = img_tensor.permute(2, 0, 1)
+                
+                # 按照V2M4的方式处理尺寸：
+                # 1. 调整宽度到target_size，保持宽高比
+                # 2. 如果高度超过target_size，则中心裁剪
+                # 3. 确保尺寸能被14整除
+                
+                height, width = img_tensor.shape[1], img_tensor.shape[2]
+                
+                # 计算新的尺寸
+                new_width = target_size
+                new_height = round(height * (new_width / width) / 14) * 14  # 使能被14整除
+                
+                # 调整尺寸
+                img_tensor = F.interpolate(
+                    img_tensor.unsqueeze(0),  # 添加batch维度
+                    size=(new_height, new_width),
+                    mode='bicubic',
+                    align_corners=False
+                ).squeeze(0)  # 移除batch维度
+                
+                # 如果高度超过target_size，进行中心裁剪
+                if new_height > target_size:
+                    start_y = (new_height - target_size) // 2
+                    img_tensor = img_tensor[:, start_y:start_y + target_size, :]
+                
+                # 记录最终尺寸
+                shapes.add((img_tensor.shape[1], img_tensor.shape[2]))
                 processed_images.append(img_tensor)
+        
+        # 如果图像尺寸不一致，需要填充到相同尺寸
+        if len(shapes) > 1:
+            print(f"⚠️ 发现不同尺寸的图像: {shapes}")
+            # 找到最大尺寸
+            max_height = max(shape[0] for shape in shapes)
+            max_width = max(shape[1] for shape in shapes)
+            
+            # 填充所有图像到相同尺寸
+            padded_images = []
+            for img in processed_images:
+                h_padding = max_height - img.shape[1]
+                w_padding = max_width - img.shape[2]
+                
+                if h_padding > 0 or w_padding > 0:
+                    pad_top = h_padding // 2
+                    pad_bottom = h_padding - pad_top
+                    pad_left = w_padding // 2
+                    pad_right = w_padding - pad_left
+                    
+                    # 用白色填充 (value=1.0)
+                    img = F.pad(
+                        img, (pad_left, pad_right, pad_top, pad_bottom), 
+                        mode="constant", value=1.0
+                    )
+                padded_images.append(img)
+            processed_images = padded_images
         
         # 堆叠成batch: [S, 3, H, W]
         return torch.stack(processed_images).to(self.device)
@@ -129,20 +189,23 @@ class VGGTHelper:
         point_clouds = []
         
         # 获取世界坐标点云
+        # VGGT模型返回的格式是 [B, S, H, W, 3]，我们需要取第一个batch
         world_points = predictions["world_points"][0].detach()  # [S, H, W, 3]
         
         # 插值到原图像尺寸
+        # world_points: [S, H, W, 3] -> [S, 3, H, W] -> interpolate -> [S, 3, H', W'] -> [S, H', W', 3]
         world_points = F.interpolate(
-            world_points.permute(0, 3, 1, 2), 
-            size=images.shape[-1], 
+            world_points.permute(0, 3, 1, 2),  # [S, H, W, 3] -> [S, 3, H, W]
+            size=images.shape[-1],  # images: [S, 3, H, W]
             mode='bilinear', 
             align_corners=False
-        ).permute(0, 2, 3, 1)
+        ).permute(0, 2, 3, 1)  # [S, 3, H', W'] -> [S, H', W', 3]
         
         for i, pts in enumerate(world_points):
             # 提取有效点云 (非黑色像素区域)
-            valid_mask = images[i].permute(1, 2, 0).sum(-1) > 0
-            points = pts.view(-1, 3)[valid_mask.view(-1)]
+            # images[i]: [3, H, W] -> [H, W, 3]
+            valid_mask = images[i].permute(1, 2, 0).sum(-1) > 0  # [H, W]
+            points = pts.view(-1, 3)[valid_mask.view(-1)]  # 选择有效点
             
             # 转换为numpy
             point_clouds.append(points.cpu().numpy())
