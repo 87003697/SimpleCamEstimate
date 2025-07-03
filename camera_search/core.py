@@ -422,17 +422,17 @@ class MeshRenderer:
         return valid_images
 
 class CleanV2M4CameraSearch:
-    """简化版V2M4相机搜索算法"""
+    """简化的V2M4相机搜索算法 - 核心实现"""
     
     def __init__(self, dust3r_model_path: str, device: str = "cuda", enable_visualization: bool = True):
-        self.device = device
         self.dust3r_model_path = dust3r_model_path
+        self.device = device
         self.enable_visualization = enable_visualization
         
         # 优化后的配置参数 - 基于性能测试最优值
         self.config = {
             'initial_samples': 128,       # 初始采样数 (海选阶段) - 调整: 2000→500→128
-            'top_n': 7,                   # DUSt3R候选数 (几何解密)
+            'top_n': 7,                   # 候选数 (几何解密)
             'pso_particles': 80,          # PSO粒子数 (全局优化) - 优化: 50→80
             'pso_iterations': 20,         # PSO迭代数 (全局优化)
             'grad_iterations': 200,       # 梯度下降迭代数 (精细调整) - 优化: 100→200
@@ -445,11 +445,16 @@ class CleanV2M4CameraSearch:
             'pso_c1': 1.0,                       # PSO个体学习因子 - 优化: 1.5→1.0
             'top_k_for_pso': 100,                # PSO选择的top-k候选
             'point_cloud_sample_ratio': 0.05,    # 点云采样比例
-            'min_confidence': 0.3                # 最小置信度阈值
+            'min_confidence': 0.3,               # 最小置信度阈值
+            
+            # 模型选择配置
+            'use_vggt': False,                   # 是否使用VGGT模型 (False=DUSt3R, True=VGGT)
+            'model_name': 'dust3r'               # 模型名称标识
         }
         
         # 延迟初始化组件
         self._dust3r_helper = None
+        self._vggt_helper = None
         self._renderer = None
         self._optimizer = None
         self._visualizer = None
@@ -468,6 +473,14 @@ class CleanV2M4CameraSearch:
             from .dust3r_helper import DUSt3RHelper
             self._dust3r_helper = DUSt3RHelper(self.dust3r_model_path, self.device)
         return self._dust3r_helper
+    
+    @property
+    def vggt_helper(self):
+        """延迟初始化VGGT助手"""
+        if self._vggt_helper is None:
+            from .vggt_helper import VGGTHelper
+            self._vggt_helper = VGGTHelper(self.device)
+        return self._vggt_helper
     
     @property
     def renderer(self):
@@ -549,25 +562,25 @@ class CleanV2M4CameraSearch:
                 'score': similarity_top1
             })
         
-        # 步骤3-4: DUSt3R估计 (核心几何约束)
-        print("🔍 步骤3-4: DUSt3R几何约束估计...")
-        dust3r_pose = self._dust3r_estimation(mesh, reference_image, top_poses)
+        # 步骤3-4: 模型估计 (几何约束 - DUSt3R或VGGT)
+        print(f"🔍 步骤3-4: {self.config['model_name'].upper()}几何约束估计...")
+        model_pose = self._model_estimation(mesh, reference_image, top_poses)
         
-        # 可视化：记录DUSt3R结果
-        if self.enable_visualization and dust3r_pose:
-            rendered_dust3r = self.renderer.render_single_view(mesh, dust3r_pose)
-            similarity_dust3r = self._compute_similarity(reference_image, rendered_dust3r)
+        # 可视化：记录模型结果
+        if self.enable_visualization and model_pose:
+            rendered_model = self.renderer.render_single_view(mesh, model_pose)
+            similarity_model = self._compute_similarity(reference_image, rendered_model)
             self.visualization_data['progression'].append({
-                'step_name': 'DUSt3R Align',
-                'pose': dust3r_pose,
-                'rendered_image': rendered_dust3r,
-                'similarity': similarity_dust3r,
-                'score': similarity_dust3r
+                'step_name': f'{self.config["model_name"].upper()} Align',
+                'pose': model_pose,
+                'rendered_image': rendered_model,
+                'similarity': similarity_model,
+                'score': similarity_model
             })
         
         # 步骤5-6: PSO搜索
         print("🔍 步骤5-6: PSO粒子群优化...")
-        pso_pose = self._pso_search(mesh, reference_image, dust3r_pose, top_poses)
+        pso_pose = self._pso_search(mesh, reference_image, model_pose, top_poses)
         
         # 可视化：记录PSO结果
         if self.enable_visualization:
@@ -734,33 +747,38 @@ class CleanV2M4CameraSearch:
         
         return selected_poses
     
-    def _dust3r_estimation(self, mesh: trimesh.Trimesh, reference_image: np.ndarray, 
-                          top_poses: List[CameraPose]) -> Optional[CameraPose]:
-        """步骤3-4: DUSt3R估计 - 核心几何约束"""
+    def _model_estimation(self, mesh: trimesh.Trimesh, reference_image: np.ndarray, 
+                         top_poses: List[CameraPose]) -> Optional[CameraPose]:
+        """步骤3-4: 模型估计 - 核心几何约束 (DUSt3R或VGGT)"""
         
         # 1. 渲染top poses
         rendered_views = [self.renderer.render_single_view(mesh, pose) for pose in top_poses]
         
-        # 2. DUSt3R推理
-        dust3r_result = self.dust3r_helper.inference(reference_image, rendered_views)
+        # 2. 根据配置选择模型进行推理
+        if self.config['use_vggt']:
+            # 使用VGGT模型
+            model_result = self.vggt_helper.inference(reference_image, rendered_views)
+        else:
+            # 使用DUSt3R模型 (默认)
+            model_result = self.dust3r_helper.inference(reference_image, rendered_views)
         
         # 3. 点云对齐 (简化版)
         best_pose = GeometryUtils.align_pointclouds_simple(
-            dust3r_result.reference_pc,
-            dust3r_result.rendered_pcs, 
-            top_poses[:len(dust3r_result.rendered_pcs)]
+            model_result.reference_pc,
+            model_result.rendered_pcs, 
+            top_poses[:len(model_result.rendered_pcs)]
         )
         
         return best_pose
     
     def _pso_search(self, mesh: trimesh.Trimesh, reference_image: np.ndarray,
-                   dust3r_pose: Optional[CameraPose], top_poses: List[CameraPose]) -> CameraPose:
+                   model_pose: Optional[CameraPose], top_poses: List[CameraPose]) -> CameraPose:
         """步骤5-6: PSO搜索"""
         
         # 准备初始候选
         candidates = top_poses[:self.config['pso_particles']]
-        if dust3r_pose is not None:
-            candidates.append(dust3r_pose)
+        if model_pose is not None:
+            candidates.append(model_pose)
         
         if not candidates:
             return CameraPose(elevation=0, azimuth=0, radius=2.5)
