@@ -4,88 +4,30 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch
-import torch.nn as nn
-from huggingface_hub import PyTorchModelHubMixin  # used for model hub
+"""
+真实的VGGT模型导入 - 基于V2M4实现
+"""
 
-# 简化版VGGT - 暂时移除复杂依赖
-class VGGTSimplified(nn.Module, PyTorchModelHubMixin):
-    """简化版VGGT模型 - 用于测试集成"""
+try:
+    # 使用真实的VGGT模型
+    from vggt.models.vggt import VGGT
+    print("✅ 成功导入真实的VGGT模型")
+except ImportError as e:
+    print(f"❌ 无法导入真实的VGGT模型: {e}")
+    print("请确保已安装VGGT包：pip install vggt")
     
-    def __init__(self, img_size=518, patch_size=14, embed_dim=1024):
-        super().__init__()
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.embed_dim = embed_dim
-        
-        # 创建简单的占位符层
-        self.dummy_conv = nn.Conv2d(3, 64, 3, padding=1)
-        self.dummy_linear = nn.Linear(64, 3)  # 输出3D点
-        
-    def forward(self, images: torch.Tensor, query_points: torch.Tensor = None):
-        """
-        简化的前向传播 - 返回与真实VGGT相同的接口
-        """
-        # If without batch dimension, add it
-        if len(images.shape) == 4:
-            images = images.unsqueeze(0)
-        if query_points is not None and len(query_points.shape) == 2:
-            query_points = query_points.unsqueeze(0)
-        
-        B, S, C, H, W = images.shape
-        
-        # 创建占位符输出
-        predictions = {}
-        
-        # 简单的卷积处理
-        dummy_features = []
-        for i in range(S):
-            feat = self.dummy_conv(images[0, i])  # [3, H, W] -> [64, H, W]
-            # 检查feat的维度并正确计算平均值
-            if feat.dim() == 3:  # [64, H, W]
-                feat = torch.mean(feat, dim=[1, 2])   # [64]
-            elif feat.dim() == 4:  # [1, 64, H, W]
-                feat = torch.mean(feat, dim=[2, 3]).squeeze(0)   # [64]
-            else:
-                feat = torch.mean(feat.view(feat.shape[0], -1), dim=1)  # 安全的平均值计算
-            dummy_features.append(feat)
-        
-        dummy_features = torch.stack(dummy_features)  # [S, 64]
-        
-        # 生成占位符的世界坐标点
-        world_points = torch.randn(B, S, H, W, 3, device=images.device)
-        world_points_conf = torch.rand(B, S, H, W, device=images.device)
-        
-        # 生成占位符的深度图
-        depth = torch.rand(B, S, H, W, 1, device=images.device)
-        depth_conf = torch.rand(B, S, H, W, device=images.device)
-        
-        # 生成占位符的相机姿态编码
-        pose_enc = torch.randn(B, S, 9, device=images.device)
-        
-        predictions.update({
-            "pose_enc": pose_enc,
-            "depth": depth,
-            "depth_conf": depth_conf,
-            "world_points": world_points,
-            "world_points_conf": world_points_conf,
-            "images": images
-        })
-        
-        # 如果有查询点，添加跟踪结果
-        if query_points is not None:
-            N = query_points.shape[-2]
-            track = torch.randn(B, S, N, 2, device=images.device)
-            vis = torch.rand(B, S, N, device=images.device)
-            conf = torch.rand(B, S, N, device=images.device)
-            
-            predictions.update({
-                "track": track,
-                "vis": vis,
-                "conf": conf
-            })
-        
-        return predictions
+    # 如果无法导入真实模型，创建一个错误提示类
+    class VGGT:
+        @classmethod
+        def from_pretrained(cls, model_name):
+            raise ImportError(
+                f"无法加载VGGT模型 '{model_name}'。\n"
+                "请确保已正确安装VGGT包：\n"
+                "pip install vggt\n"
+                "或者从源码安装：\n"
+                "git clone https://github.com/facebookresearch/vggt.git\n"
+                "cd vggt && pip install -e ."
+            )
 
-# 为了兼容性，创建别名
-VGGT = VGGTSimplified
+# 导出VGGT类
+__all__ = ['VGGT']

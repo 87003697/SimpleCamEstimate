@@ -1,5 +1,5 @@
 """
-VGGT助手模块 - 基于V2M4实现
+VGGT助手模块 - 基于V2M4实现，使用真实的VGGT模型
 """
 
 import numpy as np
@@ -19,100 +19,46 @@ class VGGTResult:
     confidence_scores: List[float]     # 置信度分数
 
 class VGGTHelper:
-    """VGGT助手类 - 基于V2M4实现"""
+    """VGGT助手类 - 基于V2M4实现，使用真实的VGGT模型"""
     
     def __init__(self, device: str = "cuda"):
         self.device = device
         self.model = None
         self.is_loaded = False
+        self.dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
         
     def load_model(self):
-        """加载VGGT模型"""
+        """加载真实的VGGT模型 - 基于V2M4实现"""
         try:
-            # 检查是否支持bfloat16
-            dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-            self.dtype = dtype
+            print("🔄 正在加载真实的VGGT模型...")
             
-            print("🔄 正在加载VGGT模型...")
-            
-            # 方法1: 使用PyTorchModelHubMixin直接加载 (V2M4的方式)
-            try:
-                from .vggt import VGGT
-                print("   尝试使用PyTorchModelHubMixin加载...")
-                self.model = VGGT.from_pretrained("facebook/VGGT-1B").to(self.device)
-                print("✅ VGGT模型加载成功")
-                self.is_loaded = True
-                return
-                
-            except Exception as e1:
-                print(f"⚠️ PyTorchModelHubMixin加载失败: {e1}")
-                
-            # 方法2: 手动加载safetensors文件
-            try:
-                import safetensors.torch
-                from huggingface_hub import hf_hub_download
-                
-                print("   尝试手动加载safetensors...")
-                
-                # 下载模型文件
-                model_path = hf_hub_download(
-                    repo_id="facebook/VGGT-1B",
-                    filename="model.safetensors",
-                    cache_dir="/home/zhiyuan_ma/.cache/huggingface"
-                )
-                
-                config_path = hf_hub_download(
-                    repo_id="facebook/VGGT-1B", 
-                    filename="config.json",
-                    cache_dir="/home/zhiyuan_ma/.cache/huggingface"
-                )
-                
-                # 读取配置
-                import json
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
-                
-                # 创建模型
-                from .vggt import VGGT
-                self.model = VGGT(
-                    img_size=config.get('img_size', 518),
-                    patch_size=config.get('patch_size', 14), 
-                    embed_dim=config.get('embed_dim', 1024)
-                )
-                
-                # 加载权重
-                state_dict = safetensors.torch.load_file(model_path)
-                self.model.load_state_dict(state_dict)
-                self.model = self.model.to(self.device)
-                
-                print("✅ VGGT模型手动加载成功")
-                self.is_loaded = True
-                return
-                
-            except Exception as e2:
-                print(f"⚠️ 手动加载safetensors失败: {e2}")
-                
-            # 方法3: 创建空模型用于测试
-            print("⚠️ 创建空VGGT模型用于测试...")
+            # 使用V2M4中的正确加载方式
             from .vggt import VGGT
-            self.model = VGGT().to(self.device)
-            print("✅ VGGT空模型创建成功")
+            self.model = VGGT.from_pretrained("facebook/VGGT-1B").to(self.device)
+            
+            print("✅ VGGT模型加载成功")
             self.is_loaded = True
             
+        except ImportError as e:
+            print(f"❌ VGGT模型导入失败: {e}")
+            print("请确保已安装VGGT包：")
+            print("pip install vggt")
+            print("或者从源码安装：")
+            print("git clone https://github.com/facebookresearch/vggt.git")
+            print("cd vggt && pip install -e .")
+            self.is_loaded = False
+            
         except Exception as e:
-            print(f"❌ VGGT模型加载完全失败: {e}")
-            print("⚠️ 将使用占位符实现")
+            print(f"❌ VGGT模型加载失败: {e}")
+            print("请检查网络连接和模型文件是否正确")
             self.is_loaded = False
         
     def _preprocess_images(self, images: List[np.ndarray]) -> torch.Tensor:
-        """预处理图像 - 转换为VGGT格式 (参考V2M4实现)"""
+        """预处理图像 - 转换为VGGT格式 (基于V2M4实现)"""
         processed_images = []
         
         # VGGT的标准输入尺寸
-        target_size = 518  # 根据config.json中的img_size
-        
-        # 首先收集所有图像的尺寸信息
-        shapes = set()
+        target_size = 518  # 与V2M4保持一致
         
         for img in images:
             # 确保图像是RGB格式
@@ -126,84 +72,40 @@ class VGGTHelper:
                 # 调整维度顺序: HWC -> CHW
                 img_tensor = img_tensor.permute(2, 0, 1)
                 
-                # 按照V2M4的方式处理尺寸：
-                # 1. 调整宽度到target_size，保持宽高比
-                # 2. 如果高度超过target_size，则中心裁剪
-                # 3. 确保尺寸能被14整除
-                
+                # 调整尺寸到target_size
                 height, width = img_tensor.shape[1], img_tensor.shape[2]
                 
-                # 计算新的尺寸
-                new_width = target_size
-                new_height = round(height * (new_width / width) / 14) * 14  # 使能被14整除
+                # 保持宽高比调整到target_size
+                if height != target_size or width != target_size:
+                    img_tensor = F.interpolate(
+                        img_tensor.unsqueeze(0),
+                        size=(target_size, target_size),
+                        mode='bicubic',
+                        align_corners=False
+                    ).squeeze(0)
                 
-                # 调整尺寸
-                img_tensor = F.interpolate(
-                    img_tensor.unsqueeze(0),  # 添加batch维度
-                    size=(new_height, new_width),
-                    mode='bicubic',
-                    align_corners=False
-                ).squeeze(0)  # 移除batch维度
-                
-                # 如果高度超过target_size，进行中心裁剪
-                if new_height > target_size:
-                    start_y = (new_height - target_size) // 2
-                    img_tensor = img_tensor[:, start_y:start_y + target_size, :]
-                
-                # 记录最终尺寸
-                shapes.add((img_tensor.shape[1], img_tensor.shape[2]))
                 processed_images.append(img_tensor)
-        
-        # 如果图像尺寸不一致，需要填充到相同尺寸
-        if len(shapes) > 1:
-            print(f"⚠️ 发现不同尺寸的图像: {shapes}")
-            # 找到最大尺寸
-            max_height = max(shape[0] for shape in shapes)
-            max_width = max(shape[1] for shape in shapes)
-            
-            # 填充所有图像到相同尺寸
-            padded_images = []
-            for img in processed_images:
-                h_padding = max_height - img.shape[1]
-                w_padding = max_width - img.shape[2]
-                
-                if h_padding > 0 or w_padding > 0:
-                    pad_top = h_padding // 2
-                    pad_bottom = h_padding - pad_top
-                    pad_left = w_padding // 2
-                    pad_right = w_padding - pad_left
-                    
-                    # 用白色填充 (value=1.0)
-                    img = F.pad(
-                        img, (pad_left, pad_right, pad_top, pad_bottom), 
-                        mode="constant", value=1.0
-                    )
-                padded_images.append(img)
-            processed_images = padded_images
         
         # 堆叠成batch: [S, 3, H, W]
         return torch.stack(processed_images).to(self.device)
     
     def _extract_point_clouds(self, predictions: dict, images: torch.Tensor) -> List[np.ndarray]:
-        """从VGGT预测结果中提取点云"""
+        """从VGGT预测结果中提取点云 - 基于V2M4实现"""
         point_clouds = []
         
-        # 获取世界坐标点云
-        # VGGT模型返回的格式是 [B, S, H, W, 3]，我们需要取第一个batch
+        # 获取世界坐标点云 - 与V2M4保持一致的处理方式
         world_points = predictions["world_points"][0].detach()  # [S, H, W, 3]
         
         # 插值到原图像尺寸
-        # world_points: [S, H, W, 3] -> [S, 3, H, W] -> interpolate -> [S, 3, H', W'] -> [S, H', W', 3]
         world_points = F.interpolate(
             world_points.permute(0, 3, 1, 2),  # [S, H, W, 3] -> [S, 3, H, W]
-            size=images.shape[-1],  # images: [S, 3, H, W]
+            size=images.shape[-1],
             mode='bilinear', 
             align_corners=False
         ).permute(0, 2, 3, 1)  # [S, 3, H', W'] -> [S, H', W', 3]
         
         for i, pts in enumerate(world_points):
-            # 提取有效点云 (非黑色像素区域)
-            # images[i]: [3, H, W] -> [H, W, 3]
+            # 提取有效点云 (非黑色像素区域) - 与V2M4保持一致
             valid_mask = images[i].permute(1, 2, 0).sum(-1) > 0  # [H, W]
             points = pts.view(-1, 3)[valid_mask.view(-1)]  # 选择有效点
             
@@ -213,22 +115,26 @@ class VGGTHelper:
         return point_clouds
     
     def inference(self, reference_image: np.ndarray, rendered_views: List[np.ndarray]) -> VGGTResult:
-        """VGGT推理"""
+        """VGGT推理 - 使用真实的VGGT模型"""
         
         if not self.is_loaded:
             self.load_model()
             
-        # 如果模型加载失败，返回占位符结果
+        # 如果模型加载失败，抛出错误而不是使用占位符
         if not self.is_loaded or self.model is None:
-            print("⚠️ VGGT模型未加载，使用占位符结果")
-            return self._create_dummy_result(reference_image, rendered_views)
+            raise RuntimeError(
+                "VGGT模型未能正确加载。请确保：\n"
+                "1. 已正确安装VGGT包\n"
+                "2. 网络连接正常，可以下载模型文件\n"
+                "3. 有足够的GPU内存"
+            )
         
         try:
             # 1. 预处理图像
             all_images = [reference_image] + rendered_views
             images_tensor = self._preprocess_images(all_images)
             
-            # 2. VGGT推理
+            # 2. VGGT推理 - 使用与V2M4相同的方式
             with torch.no_grad():
                 with torch.cuda.amp.autocast(dtype=self.dtype):
                     predictions = self.model(images_tensor)
@@ -237,7 +143,7 @@ class VGGTHelper:
             point_clouds = self._extract_point_clouds(predictions, images_tensor)
             
             # 4. 构建结果
-            reference_pc = point_clouds[0] if len(point_clouds) > 0 else np.random.rand(1000, 3).astype(np.float32)
+            reference_pc = point_clouds[0] if len(point_clouds) > 0 else np.array([]).reshape(0, 3)
             rendered_pcs = point_clouds[1:] if len(point_clouds) > 1 else []
             
             # 提取深度图
@@ -267,17 +173,4 @@ class VGGTHelper:
             
         except Exception as e:
             print(f"❌ VGGT推理失败: {e}")
-            return self._create_dummy_result(reference_image, rendered_views)
-    
-    def _create_dummy_result(self, reference_image: np.ndarray, rendered_views: List[np.ndarray]) -> VGGTResult:
-        """创建占位符结果"""
-        # 创建占位符点云
-        dummy_pc = np.random.rand(1000, 3).astype(np.float32)
-        dummy_depth = np.random.rand(512, 512).astype(np.float32)
-        
-        return VGGTResult(
-            reference_pc=dummy_pc,
-            rendered_pcs=[dummy_pc for _ in rendered_views],
-            depth_maps=[dummy_depth for _ in rendered_views],
-            confidence_scores=[0.5 for _ in rendered_views]
-        ) 
+            raise RuntimeError(f"VGGT推理过程中发生错误: {e}") 
