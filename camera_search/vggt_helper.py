@@ -28,30 +28,15 @@ class VGGTHelper:
         self.dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
         
     def load_model(self):
-        """加载真实的VGGT模型 - 基于V2M4实现"""
-        try:
-            print("🔄 正在加载真实的VGGT模型...")
-            
-            # 使用V2M4中的正确加载方式
-            from .vggt import VGGT
-            self.model = VGGT.from_pretrained("facebook/VGGT-1B").to(self.device)
-            
-            print("✅ VGGT模型加载成功")
-            self.is_loaded = True
-            
-        except ImportError as e:
-            print(f"❌ VGGT模型导入失败: {e}")
-            print("请确保已安装VGGT包：")
-            print("pip install vggt")
-            print("或者从源码安装：")
-            print("git clone https://github.com/facebookresearch/vggt.git")
-            print("cd vggt && pip install -e .")
-            self.is_loaded = False
-            
-        except Exception as e:
-            print(f"❌ VGGT模型加载失败: {e}")
-            print("请检查网络连接和模型文件是否正确")
-            self.is_loaded = False
+        """加载真实的VGGT模型 - 基于V2M4实现 (无异常处理版本)"""
+        print("🔄 正在加载真实的VGGT模型...")
+        
+        # 使用V2M4中的正确加载方式 - 直接执行，不捕获异常
+        from .vggt import VGGT
+        self.model = VGGT.from_pretrained("facebook/VGGT-1B").to(self.device)
+        
+        print("✅ VGGT模型加载成功")
+        self.is_loaded = True
         
     def _preprocess_images(self, images: List[np.ndarray]) -> torch.Tensor:
         """预处理图像 - 转换为VGGT格式 (基于V2M4实现)"""
@@ -115,62 +100,49 @@ class VGGTHelper:
         return point_clouds
     
     def inference(self, reference_image: np.ndarray, rendered_views: List[np.ndarray]) -> VGGTResult:
-        """VGGT推理 - 使用真实的VGGT模型"""
+        """VGGT推理 - 使用真实的VGGT模型 (无异常处理版本)"""
         
         if not self.is_loaded:
             self.load_model()
             
-        # 如果模型加载失败，抛出错误而不是使用占位符
-        if not self.is_loaded or self.model is None:
-            raise RuntimeError(
-                "VGGT模型未能正确加载。请确保：\n"
-                "1. 已正确安装VGGT包\n"
-                "2. 网络连接正常，可以下载模型文件\n"
-                "3. 有足够的GPU内存"
-            )
+        # 直接执行，不检查模型状态
+        # 1. 预处理图像
+        all_images = [reference_image] + rendered_views
+        images_tensor = self._preprocess_images(all_images)
         
-        try:
-            # 1. 预处理图像
-            all_images = [reference_image] + rendered_views
-            images_tensor = self._preprocess_images(all_images)
-            
-            # 2. VGGT推理 - 使用与V2M4相同的方式
-            with torch.no_grad():
-                with torch.cuda.amp.autocast(dtype=self.dtype):
-                    predictions = self.model(images_tensor)
-            
-            # 3. 提取点云
-            point_clouds = self._extract_point_clouds(predictions, images_tensor)
-            
-            # 4. 构建结果
-            reference_pc = point_clouds[0] if len(point_clouds) > 0 else np.array([]).reshape(0, 3)
-            rendered_pcs = point_clouds[1:] if len(point_clouds) > 1 else []
-            
-            # 提取深度图
-            depth_maps = []
-            if "depth" in predictions:
-                depth_tensor = predictions["depth"][0].detach()  # [S, H, W, 1]
-                for i in range(depth_tensor.shape[0]):
-                    depth_map = depth_tensor[i, :, :, 0].cpu().numpy()
-                    depth_maps.append(depth_map)
-            
-            # 计算置信度分数
-            confidence_scores = []
-            if "world_points_conf" in predictions:
-                conf_tensor = predictions["world_points_conf"][0].detach()  # [S, H, W]
-                for i in range(conf_tensor.shape[0]):
-                    avg_conf = conf_tensor[i].mean().item()
-                    confidence_scores.append(avg_conf)
-            else:
-                confidence_scores = [0.8 for _ in rendered_pcs]
-            
-            return VGGTResult(
-                reference_pc=reference_pc,
-                rendered_pcs=rendered_pcs,
-                depth_maps=depth_maps,
-                confidence_scores=confidence_scores
-            )
-            
-        except Exception as e:
-            print(f"❌ VGGT推理失败: {e}")
-            raise RuntimeError(f"VGGT推理过程中发生错误: {e}") 
+        # 2. VGGT推理 - 使用与V2M4相同的方式
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(dtype=self.dtype):
+                predictions = self.model(images_tensor)
+        
+        # 3. 提取点云
+        point_clouds = self._extract_point_clouds(predictions, images_tensor)
+        
+        # 4. 构建结果
+        reference_pc = point_clouds[0] if len(point_clouds) > 0 else np.array([]).reshape(0, 3)
+        rendered_pcs = point_clouds[1:] if len(point_clouds) > 1 else []
+        
+        # 提取深度图
+        depth_maps = []
+        if "depth" in predictions:
+            depth_tensor = predictions["depth"][0].detach()  # [S, H, W, 1]
+            for i in range(depth_tensor.shape[0]):
+                depth_map = depth_tensor[i, :, :, 0].cpu().numpy()
+                depth_maps.append(depth_map)
+        
+        # 计算置信度分数
+        confidence_scores = []
+        if "world_points_conf" in predictions:
+            conf_tensor = predictions["world_points_conf"][0].detach()  # [S, H, W]
+            for i in range(conf_tensor.shape[0]):
+                avg_conf = conf_tensor[i].mean().item()
+                confidence_scores.append(avg_conf)
+        else:
+            confidence_scores = [0.8 for _ in rendered_pcs]
+        
+        return VGGTResult(
+            reference_pc=reference_pc,
+            rendered_pcs=rendered_pcs,
+            depth_maps=depth_maps,
+            confidence_scores=confidence_scores
+        ) 

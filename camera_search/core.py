@@ -431,13 +431,13 @@ class CleanV2M4CameraSearch:
         
         # 优化后的配置参数 - 基于性能测试最优值
         self.config = {
-            'initial_samples': 128,       # 初始采样数 (海选阶段) - 调整: 2000→500→128
+            'initial_samples': 512,       # 初始采样数 (海选阶段) - 提升: 128→512
             'top_n': 7,                   # 候选数 (几何解密)
             'pso_particles': 80,          # PSO粒子数 (全局优化) - 优化: 50→80
             'pso_iterations': 20,         # PSO迭代数 (全局优化)
             'grad_iterations': 200,       # 梯度下降迭代数 (精细调整) - 优化: 100→200
             'image_size': 512,            # 图像尺寸
-            'render_batch_size': 16,      # 批量渲染大小 - 平衡性能和内存 (4-128可调)
+            'render_batch_size': 32,      # 批量渲染大小 - 提升: 16→32 (平衡性能和内存)
             
             # 新增的优化参数
             'dust3r_alignment_iterations': 1000,  # DUSt3R对齐迭代数 - 优化: 300→1000
