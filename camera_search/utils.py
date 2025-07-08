@@ -55,103 +55,71 @@ def compute_image_similarity(img1: torch.Tensor, img2: torch.Tensor, timeout: in
     old_handler = signal.signal(signal.SIGALRM, timeout_handler)
     signal.alarm(timeout)
     
-    try:
-        # 转换为numpy数组进行处理，因为skimage需要numpy
-        if isinstance(img1, torch.Tensor):
-            img1_np = img1.cpu().numpy()
-        else:
-            img1_np = img1
-            
-        if isinstance(img2, torch.Tensor):
-            img2_np = img2.cpu().numpy()
-        else:
-            img2_np = img2
+    # 转换为numpy数组进行处理，因为skimage需要numpy
+    if isinstance(img1, torch.Tensor):
+        img1_np = img1.cpu().numpy()
+    else:
+        img1_np = img1
         
-        # 确保图像尺寸一致
-        if img1_np.shape != img2_np.shape:
-            img2_np = cv2.resize(img2_np, img1_np.shape[:2][::-1])
-        
-        # 检查图像尺寸，确保足够大
-        min_size = min(img1_np.shape[:2])
-        if min_size < 7:
-            # 图像太小，只使用MSE
-            mse_score = torch.mean((torch.from_numpy(img1_np).float() - torch.from_numpy(img2_np).float()) ** 2)
-            return (mse_score / 1000.0).item()
-        
-        # 使用SSIM + MSE组合
-        try:
-            from skimage.metrics import structural_similarity as ssim
-            
-            # 计算合适的win_size
-            win_size = min(7, min_size)
-            if win_size % 2 == 0:
-                win_size -= 1  # 确保是奇数
-            
-            # 限制图像大小以提高计算速度
-            if max(img1_np.shape[:2]) > 512:
-                scale_factor = 512 / max(img1_np.shape[:2])
-                new_height = int(img1_np.shape[0] * scale_factor)
-                new_width = int(img1_np.shape[1] * scale_factor)
-                img1_resized = cv2.resize(img1_np, (new_width, new_height))
-                img2_resized = cv2.resize(img2_np, (new_width, new_height))
-            else:
-                img1_resized = img1_np
-                img2_resized = img2_np
-            
-            # SSIM相似度 - 修复参数
-            if len(img1_resized.shape) == 3:
-                # 彩色图像
-                ssim_score = ssim(img1_resized, img2_resized, 
-                                win_size=win_size,
-                                channel_axis=2,  # 新版本skimage参数
-                                data_range=255)
-            else:
-                # 灰度图像
-                ssim_score = ssim(img1_resized, img2_resized, 
-                                win_size=win_size,
-                                data_range=255)
-            
-            # MSE距离 - 使用torch计算
-            mse_score = torch.mean((torch.from_numpy(img1_resized).float() - torch.from_numpy(img2_resized).float()) ** 2)
-            
-            # 组合分数 (越小越好)
-            return 1.0 - ssim_score + (mse_score / 1000.0).item()
-            
-        except ImportError:
-            # 如果没有scikit-image，使用简单MSE
-            mse_score = torch.mean((torch.from_numpy(img1_np).float() - torch.from_numpy(img2_np).float()) ** 2)
-            return (mse_score / 1000.0).item()
-        except Exception as e:
-            # SSIM计算失败，回退到MSE
-            print(f"SSIM calculation failed, using MSE: {e}")
-            mse_score = torch.mean((torch.from_numpy(img1_np).float() - torch.from_numpy(img2_np).float()) ** 2)
-            return (mse_score / 1000.0).item()
+    if isinstance(img2, torch.Tensor):
+        img2_np = img2.cpu().numpy()
+    else:
+        img2_np = img2
     
-    except TimeoutException:
-        print(f"Similarity calculation timeout ({timeout}s), using fast MSE")
-        # 超时时使用快速MSE计算
-        if isinstance(img1, torch.Tensor):
-            img1_np = img1.cpu().numpy()
-        else:
-            img1_np = img1
-            
-        if isinstance(img2, torch.Tensor):
-            img2_np = img2.cpu().numpy()
-        else:
-            img2_np = img2
-            
-        mse_score = torch.mean((torch.from_numpy(img1_np[::4, ::4]).float() - torch.from_numpy(img2_np[::4, ::4]).float()) ** 2)
-        return (mse_score / 1000.0).item()
+    # 确保图像尺寸一致
+    if img1_np.shape != img2_np.shape:
+        img2_np = cv2.resize(img2_np, img1_np.shape[:2][::-1])
     
-    except Exception as e:
-        print(f"Similarity calculation error: {e}")
-        # 出错时返回一个中等分数
-        return 0.5
-    
-    finally:
-        # 恢复原始信号处理器
+    # 检查图像尺寸，确保足够大
+    min_size = min(img1_np.shape[:2])
+    if min_size < 7:
+        # 图像太小，只使用MSE
+        mse_score = torch.mean((torch.from_numpy(img1_np).float() - torch.from_numpy(img2_np).float()) ** 2)
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old_handler)
+        return (mse_score / 1000.0).item()
+    
+    # 使用SSIM + MSE组合
+    from skimage.metrics import structural_similarity as ssim
+    
+    # 计算合适的win_size
+    win_size = min(7, min_size)
+    if win_size % 2 == 0:
+        win_size -= 1  # 确保是奇数
+    
+    # 限制图像大小以提高计算速度
+    if max(img1_np.shape[:2]) > 512:
+        scale_factor = 512 / max(img1_np.shape[:2])
+        new_height = int(img1_np.shape[0] * scale_factor)
+        new_width = int(img1_np.shape[1] * scale_factor)
+        img1_resized = cv2.resize(img1_np, (new_width, new_height))
+        img2_resized = cv2.resize(img2_np, (new_width, new_height))
+    else:
+        img1_resized = img1_np
+        img2_resized = img2_np
+    
+    # SSIM相似度 - 修复参数
+    if len(img1_resized.shape) == 3:
+        # 彩色图像
+        ssim_score = ssim(img1_resized, img2_resized, 
+                        win_size=win_size,
+                        channel_axis=2,  # 新版本skimage参数
+                        data_range=255)
+    else:
+        # 灰度图像
+        ssim_score = ssim(img1_resized, img2_resized, 
+                        win_size=win_size,
+                        data_range=255)
+    
+    # MSE距离 - 使用torch计算
+    mse_score = torch.mean((torch.from_numpy(img1_resized).float() - torch.from_numpy(img2_resized).float()) ** 2)
+    
+    # 恢复原始信号处理器
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, old_handler)
+    
+    # 组合分数 (越小越好)
+    return 1.0 - ssim_score + (mse_score / 1000.0).item()
 
 def compute_image_similarity_torch(img1: torch.Tensor, img2: torch.Tensor) -> float:
     """

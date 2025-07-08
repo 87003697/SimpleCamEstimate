@@ -301,28 +301,19 @@ class MeshRenderer:
     
     def _check_dependencies(self):
         """检查必要的依赖"""
-        try:
-            # 检查KiuiKit
-            from kiui.mesh import Mesh as KiuiMesh
-            from kiui.cam import OrbitCamera
-            self.kiui_available = True
-        except ImportError:
-            raise ImportError("KiuiKit not available, please install kiui package")
+        # 检查KiuiKit
+        from kiui.mesh import Mesh as KiuiMesh
+        from kiui.cam import OrbitCamera
+        self.kiui_available = True
         
-        try:
-            # 检查nvdiffrast
-            import nvdiffrast.torch as dr
-            self.nvdiffrast_available = True
-        except ImportError:
-            raise ImportError("nvdiffrast not available, please install nvdiffrast package")
+        # 检查nvdiffrast
+        import nvdiffrast.torch as dr
+        self.nvdiffrast_available = True
         
-        try:
-            # 检查StandardKiuiRenderer
-            sys.path.append(str(Path(__file__).parent.parent / "_reference" / "MeshSeriesGen" / "tools" / "visualization"))
-            from kiui_mesh_renderer import StandardKiuiRenderer
-            self.renderer_available = True
-        except ImportError:
-            raise ImportError("StandardKiuiRenderer not available, please check path settings")
+        # 检查StandardKiuiRenderer
+        sys.path.append(str(Path(__file__).parent.parent / "_reference" / "MeshSeriesGen" / "tools" / "visualization"))
+        from kiui_mesh_renderer import StandardKiuiRenderer
+        self.renderer_available = True
     
     @property
     def renderer(self):
@@ -443,23 +434,22 @@ class CleanV2M4CameraSearch:
             'min_confidence': 0.3,               # 最小置信度阈值
             
             # 模型选择配置
-            'use_vggt': False,                   # 是否使用VGGT模型 (False=DUSt3R, True=VGGT)
+            'use_dust3r': True,                  # 是否使用DUSt3R模型
             'model_name': 'dust3r',              # 模型名称标识
             'skip_model_step': False             # 是否跳过模型估计步骤
         }
         
         # 延迟初始化组件
         self._dust3r_helper = None
-        self._vggt_helper = None
         self._renderer = None
         self._optimizer = None
         self._visualizer = None
         
         # 根据配置更新模型名称
-        if self.config['use_vggt']:
-            self.config['model_name'] = 'vggt'
-        else:
+        if self.config['use_dust3r']:
             self.config['model_name'] = 'dust3r'
+        else:
+            self.config['model_name'] = 'dust3r' # 确保默认使用dust3r
         
         # 可视化数据收集
         self.visualization_data = {
@@ -475,15 +465,7 @@ class CleanV2M4CameraSearch:
             from .dust3r_helper import DUSt3RHelper
             self._dust3r_helper = DUSt3RHelper(self.dust3r_model_path, self.device)
         return self._dust3r_helper
-    
-    @property
-    def vggt_helper(self):
-        """延迟初始化VGGT助手"""
-        if self._vggt_helper is None:
-            from .vggt_helper import VGGTHelper
-            self._vggt_helper = VGGTHelper(self.device)
-        return self._vggt_helper
-    
+
     @property
     def renderer(self):
         """延迟初始化渲染器"""
@@ -638,50 +620,46 @@ class CleanV2M4CameraSearch:
         
         # 生成可视化结果
         if self.enable_visualization and save_visualization and self.visualizer:
-            try:
-                # 创建结果对比图
-                final_rendered = self.renderer.render_single_view(mesh, final_pose)
+            # 创建结果对比图
+            final_rendered = self.renderer.render_single_view(mesh, final_pose)
+            
+            # 转换tensor为numpy数组供可视化使用
+            ref_img_np = self._tensor_to_numpy(reference_image)
+            rendered_img_np = self._tensor_to_numpy(final_rendered)
+            
+            comparison_path = self.visualizer.create_result_comparison(
+                data_pair=data_pair,
+                reference_image=ref_img_np,
+                rendered_result=rendered_img_np,
+                final_pose=final_pose,
+                mesh_info=self.visualization_data['mesh_info'],
+                algorithm_stats=self.visualization_data['algorithm_stats'],
+                execution_time=execution_time
+            )
+            
+            # 创建优化过程可视化
+            if self.visualization_data['progression']:
+                # 转换progression数据中的图像
+                progression_data_np = []
+                for step_data in self.visualization_data['progression']:
+                    step_data_np = step_data.copy()
+                    if 'rendered_image' in step_data_np and step_data_np['rendered_image'] is not None:
+                        step_data_np['rendered_image'] = self._tensor_to_numpy(step_data_np['rendered_image'])
+                    progression_data_np.append(step_data_np)
                 
-                # 转换tensor为numpy数组供可视化使用
-                ref_img_np = self._tensor_to_numpy(reference_image)
-                rendered_img_np = self._tensor_to_numpy(final_rendered)
-                
-                comparison_path = self.visualizer.create_result_comparison(
+                progression_path = self.visualizer.create_pose_progression_visualization(
                     data_pair=data_pair,
                     reference_image=ref_img_np,
-                    rendered_result=rendered_img_np,
-                    final_pose=final_pose,
-                    mesh_info=self.visualization_data['mesh_info'],
-                    algorithm_stats=self.visualization_data['algorithm_stats'],
-                    execution_time=execution_time
+                    progression_data=progression_data_np,
+                    final_pose=final_pose
                 )
-                
-                # 创建优化过程可视化
-                if self.visualization_data['progression']:
-                    # 转换progression数据中的图像
-                    progression_data_np = []
-                    for step_data in self.visualization_data['progression']:
-                        step_data_np = step_data.copy()
-                        if 'rendered_image' in step_data_np and step_data_np['rendered_image'] is not None:
-                            step_data_np['rendered_image'] = self._tensor_to_numpy(step_data_np['rendered_image'])
-                        progression_data_np.append(step_data_np)
-                    
-                    progression_path = self.visualizer.create_pose_progression_visualization(
-                        data_pair=data_pair,
-                        reference_image=ref_img_np,
-                        progression_data=progression_data_np,
-                        final_pose=final_pose
-                    )
-                
-                # 保存单独的结果图像
-                individual_paths = self.visualizer.save_individual_results(
-                    data_pair=data_pair,
-                    reference_image=ref_img_np,
-                    rendered_result=rendered_img_np
-                )
-                
-            except Exception as e:
-                print(f"⚠️ Visualization generation failed: {e}")
+            
+            # 保存单独的结果图像
+            individual_paths = self.visualizer.save_individual_results(
+                data_pair=data_pair,
+                reference_image=ref_img_np,
+                rendered_result=rendered_img_np
+            )
         
         print("✅ V2M4 camera search completed!")
         print(f"⏱️ Total execution time: {execution_time:.2f} seconds")
@@ -710,59 +688,25 @@ class CleanV2M4CameraSearch:
         scores = []
         batch_size = self.config['render_batch_size']  # 使用配置的批量渲染大小
         
-        try:
-            # 尝试批量渲染
-            for i in range(0, len(poses), batch_size):
-                batch_poses = poses[i:i+batch_size]
-                print(f"   Batch rendering {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
-                
-                try:
-                    # 批量渲染这一组
-                    rendered_images = self.renderer.render_batch_views(mesh, batch_poses)
-                    
-                    # 计算相似度分数
-                    for rendered_img in rendered_images:
-                        if rendered_img is not None:
-                            score = self._compute_similarity(reference_image, rendered_img)
-                            scores.append(score)
-                        else:
-                            scores.append(float('inf'))  # 渲染失败，给最差分数
-                            
-                except Exception as e:
-                    print(f"   ⚠️ Batch rendering failed, switching to sequential rendering: {e}")
-                    # 批量渲染失败，逐个渲染这一组
-                    for pose in batch_poses:
-                        try:
-                            rendered_img = self.renderer.render_single_view(mesh, pose)
-                            score = self._compute_similarity(reference_image, rendered_img)
-                            scores.append(score)
-                        except Exception as e2:
-                            print(f"   ⚠️ Single rendering also failed: {e2}")
-                            scores.append(float('inf'))
-                
-                # 清理GPU内存
-                from .utils import cleanup_gpu_memory
-                cleanup_gpu_memory()
-                
-        except Exception as e:
-            print(f"   ❌ Batch rendering failed completely, using sequential rendering: {e}")
-            # 完全回退到顺序渲染
-            scores = []
-            for i, pose in enumerate(poses):
-                if i % 100 == 0:
-                    print(f"   顺序渲染进度: {i+1}/{len(poses)}")
-                try:
-                    rendered_img = self.renderer.render_single_view(mesh, pose)
+        # 尝试批量渲染
+        for i in range(0, len(poses), batch_size):
+            batch_poses = poses[i:i+batch_size]
+            print(f"   Batch rendering {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
+            
+            # 批量渲染这一组
+            rendered_images = self.renderer.render_batch_views(mesh, batch_poses)
+            
+            # 计算相似度分数
+            for rendered_img in rendered_images:
+                if rendered_img is not None:
                     score = self._compute_similarity(reference_image, rendered_img)
                     scores.append(score)
-                except Exception as e2:
-                    print(f"   ⚠️ Rendering pose {i} failed: {e2}")
-                    scores.append(float('inf'))
-                
-                # 每50个姿态清理一次内存
-                if i % 50 == 0:
-                    from .utils import cleanup_gpu_memory
-                    cleanup_gpu_memory()
+                else:
+                    scores.append(float('inf'))  # 渲染失败，给最差分数
+            
+            # 清理GPU内存
+            from .utils import cleanup_gpu_memory
+            cleanup_gpu_memory()
         
         # 选择top-n
         if len(scores) != len(poses):
@@ -791,9 +735,9 @@ class CleanV2M4CameraSearch:
         rendered_views = [self.renderer.render_single_view(mesh, pose) for pose in top_poses]
         
         # 2. 根据配置选择模型进行推理
-        if self.config['use_vggt']:
-            # 使用VGGT模型
-            model_result = self.vggt_helper.inference(reference_image, rendered_views)
+        if self.config['use_dust3r']:
+            # 使用DUSt3R模型
+            model_result = self.dust3r_helper.inference(reference_image, rendered_views)
         else:
             # 使用DUSt3R模型 (默认)
             model_result = self.dust3r_helper.inference(reference_image, rendered_views)
