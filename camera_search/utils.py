@@ -193,8 +193,8 @@ def compute_image_similarity_torch(img1: torch.Tensor, img2: torch.Tensor) -> fl
         ssim_score = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / \
                      ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
         
-        # 组合分数 (越小越好)
-        return (1.0 - ssim_score + mse).item()
+        # 组合分数 (越小越好) - 修复MSE系数，与原始实现保持一致
+        return (1.0 - ssim_score + mse / 1000.0).item()
 
 def cleanup_gpu_memory():
     """清理GPU内存"""
