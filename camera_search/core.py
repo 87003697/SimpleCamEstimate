@@ -695,25 +695,27 @@ class CleanV2M4CameraSearch:
         batch_size = self.config['render_batch_size']  # 使用配置的批量渲染大小
         max_batch_size = self.config.get('max_batch_size', 8)  # 获取最大批量大小
         
-        # 尝试批量渲染
-        for i in range(0, len(poses), batch_size):
-            batch_poses = poses[i:i+batch_size]
-            print(f"   Batch rendering {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
-            
-            # 批量渲染这一组，使用配置的max_batch_size
-            rendered_images = self.renderer.render_batch_views(mesh, batch_poses, max_batch_size)
-            
-            # 计算相似度分数
-            for rendered_img in rendered_images:
-                if rendered_img is not None:
-                    score = self._compute_similarity(reference_image, rendered_img)
-                    scores.append(score)
-                else:
-                    scores.append(float('inf'))  # 渲染失败，给最差分数
-            
-            # 清理GPU内存
-            from .utils import cleanup_gpu_memory
-            cleanup_gpu_memory()
+        # 使用no_grad优化性能，因为top-n选择不需要梯度
+        with torch.no_grad():
+            # 尝试批量渲染
+            for i in range(0, len(poses), batch_size):
+                batch_poses = poses[i:i+batch_size]
+                print(f"   Batch rendering {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
+                
+                # 批量渲染这一组，使用配置的max_batch_size
+                rendered_images = self.renderer.render_batch_views(mesh, batch_poses, max_batch_size)
+                
+                # 计算相似度分数
+                for rendered_img in rendered_images:
+                    if rendered_img is not None:
+                        score = self._compute_similarity(reference_image, rendered_img)
+                        scores.append(score)
+                    else:
+                        scores.append(float('inf'))  # 渲染失败，给最差分数
+                
+                # 清理GPU内存
+                from .utils import cleanup_gpu_memory
+                cleanup_gpu_memory()
         
         # 选择top-n
         if len(scores) != len(poses):
@@ -784,23 +786,25 @@ class CleanV2M4CameraSearch:
         if self.config.get('use_batch_optimization', True):
             # 使用批量优化
             def batch_objective(poses: List[CameraPose]) -> List[float]:
-                max_batch_size = self.config.get('max_batch_size', 8)
-                rendered_images = self.renderer.render_batch_views(mesh, poses, max_batch_size)
-                scores = []
-                for rendered_img in rendered_images:
-                    if rendered_img is not None:
-                        score = self._compute_similarity(reference_image, rendered_img)
-                        scores.append(score)
-                    else:
-                        scores.append(float('inf'))  # 渲染失败，给最差分数
-                return scores
+                with torch.no_grad():  # PSO优化不需要梯度，添加no_grad提升性能
+                    max_batch_size = self.config.get('max_batch_size', 8)
+                    rendered_images = self.renderer.render_batch_views(mesh, poses, max_batch_size)
+                    scores = []
+                    for rendered_img in rendered_images:
+                        if rendered_img is not None:
+                            score = self._compute_similarity(reference_image, rendered_img)
+                            scores.append(score)
+                        else:
+                            scores.append(float('inf'))  # 渲染失败，给最差分数
+                    return scores
             
             return self.optimizer.pso_optimize_batch(batch_objective, candidates, bounds)
         else:
             # 使用传统单次优化
             def objective(pose: CameraPose) -> float:
-                rendered = self.renderer.render_single_view(mesh, pose)
-                return self._compute_similarity(reference_image, rendered)
+                with torch.no_grad():  # PSO优化不需要梯度，添加no_grad提升性能
+                    rendered = self.renderer.render_single_view(mesh, pose)
+                    return self._compute_similarity(reference_image, rendered)
             
             return self.optimizer.pso_optimize(objective, candidates, bounds)
     

@@ -133,66 +133,68 @@ def compute_image_similarity_torch(img1: torch.Tensor, img2: torch.Tensor) -> fl
         float: 相似度分数（越小越相似）
     """
     
-    # 确保都是torch.Tensor
-    if not isinstance(img1, torch.Tensor):
-        img1 = torch.from_numpy(img1).float()
-    if not isinstance(img2, torch.Tensor):
-        img2 = torch.from_numpy(img2).float()
-    
-    # 确保在同一设备上
-    device = img1.device
-    img2 = img2.to(device)
-    
-    # 确保数据类型一致
-    if img1.dtype != img2.dtype:
-        img1 = img1.float()
-        img2 = img2.float()
-    
-    # 归一化到[0,1]范围
-    if img1.max() > 1.0:
-        img1 = img1 / 255.0
-    if img2.max() > 1.0:
-        img2 = img2 / 255.0
-    
-    # 确保尺寸一致
-    if img1.shape != img2.shape:
-        # 使用PyTorch的interpolate进行resize
-        import torch.nn.functional as F
-        img2 = img2.unsqueeze(0).permute(0, 3, 1, 2)  # HWC -> BCHW
-        img2 = F.interpolate(img2, size=img1.shape[:2], mode='bilinear', align_corners=False)
-        img2 = img2.squeeze(0).permute(1, 2, 0)  # BCHW -> HWC
-    
-    # 计算MSE
-    mse = torch.mean((img1 - img2) ** 2)
-    
-    # 计算简化版SSIM（基于方差和协方差）
-    # 转换为灰度图进行SSIM计算
-    if img1.dim() == 3 and img1.shape[2] == 3:
-        # RGB转灰度
-        gray1 = 0.299 * img1[:, :, 0] + 0.587 * img1[:, :, 1] + 0.114 * img1[:, :, 2]
-        gray2 = 0.299 * img2[:, :, 0] + 0.587 * img2[:, :, 1] + 0.114 * img2[:, :, 2]
-    else:
-        gray1 = img1.squeeze() if img1.dim() == 3 else img1
-        gray2 = img2.squeeze() if img2.dim() == 3 else img2
-    
-    # 简化SSIM计算
-    mu1 = torch.mean(gray1)
-    mu2 = torch.mean(gray2)
-    
-    sigma1_sq = torch.var(gray1)
-    sigma2_sq = torch.var(gray2)
-    sigma12 = torch.mean((gray1 - mu1) * (gray2 - mu2))
-    
-    # SSIM常数
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
-    
-    # SSIM计算
-    ssim_score = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / \
-                 ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
-    
-    # 组合分数 (越小越好)
-    return (1.0 - ssim_score + mse).item()
+    # 使用no_grad优化性能，因为相似度计算不需要梯度
+    with torch.no_grad():
+        # 确保都是torch.Tensor
+        if not isinstance(img1, torch.Tensor):
+            img1 = torch.from_numpy(img1).float()
+        if not isinstance(img2, torch.Tensor):
+            img2 = torch.from_numpy(img2).float()
+        
+        # 确保在同一设备上
+        device = img1.device
+        img2 = img2.to(device)
+        
+        # 确保数据类型一致
+        if img1.dtype != img2.dtype:
+            img1 = img1.float()
+            img2 = img2.float()
+        
+        # 归一化到[0,1]范围
+        if img1.max() > 1.0:
+            img1 = img1 / 255.0
+        if img2.max() > 1.0:
+            img2 = img2 / 255.0
+        
+        # 确保尺寸一致
+        if img1.shape != img2.shape:
+            # 使用PyTorch的interpolate进行resize
+            import torch.nn.functional as F
+            img2 = img2.unsqueeze(0).permute(0, 3, 1, 2)  # HWC -> BCHW
+            img2 = F.interpolate(img2, size=img1.shape[:2], mode='bilinear', align_corners=False)
+            img2 = img2.squeeze(0).permute(1, 2, 0)  # BCHW -> HWC
+        
+        # 计算MSE
+        mse = torch.mean((img1 - img2) ** 2)
+        
+        # 计算简化版SSIM（基于方差和协方差）
+        # 转换为灰度图进行SSIM计算
+        if img1.dim() == 3 and img1.shape[2] == 3:
+            # RGB转灰度
+            gray1 = 0.299 * img1[:, :, 0] + 0.587 * img1[:, :, 1] + 0.114 * img1[:, :, 2]
+            gray2 = 0.299 * img2[:, :, 0] + 0.587 * img2[:, :, 1] + 0.114 * img2[:, :, 2]
+        else:
+            gray1 = img1.squeeze() if img1.dim() == 3 else img1
+            gray2 = img2.squeeze() if img2.dim() == 3 else img2
+        
+        # 简化SSIM计算
+        mu1 = torch.mean(gray1)
+        mu2 = torch.mean(gray2)
+        
+        sigma1_sq = torch.var(gray1)
+        sigma2_sq = torch.var(gray2)
+        sigma12 = torch.mean((gray1 - mu1) * (gray2 - mu2))
+        
+        # SSIM常数
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
+        
+        # SSIM计算
+        ssim_score = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / \
+                     ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
+        
+        # 组合分数 (越小越好)
+        return (1.0 - ssim_score + mse).item()
 
 def cleanup_gpu_memory():
     """清理GPU内存"""
