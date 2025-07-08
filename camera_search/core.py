@@ -9,9 +9,10 @@ import tempfile
 import atexit
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
-import numpy as np
+import torch
 import cv2
 import trimesh
+import numpy as np
 from pathlib import Path
 from scipy.spatial.distance import cdist
 import random
@@ -35,7 +36,7 @@ class CameraPose:
         """直接应用到KiuiKit OrbitCamera"""
         camera.from_angle(elevation=self.elevation, azimuth=self.azimuth, is_degree=True)
         camera.radius = self.radius
-        camera.center = np.array([self.center_x, self.center_y, self.center_z], dtype=np.float32)
+        camera.center = torch.tensor([self.center_x, self.center_y, self.center_z], dtype=torch.float32)
     
     def get_kiui_render_params(self) -> Dict[str, Any]:
         """获取kiui_mesh_renderer.render_single_view()的参数"""
@@ -46,37 +47,37 @@ class CameraPose:
             'target_point': self.target_point
         }
     
-    def to_matrix(self) -> np.ndarray:
+    def to_matrix(self) -> torch.Tensor:
         """转换为4x4变换矩阵"""
         # 球坐标到笛卡尔坐标
-        elev_rad = np.radians(self.elevation)
-        azim_rad = np.radians(self.azimuth)
+        elev_rad = torch.deg2rad(torch.tensor(self.elevation))
+        azim_rad = torch.deg2rad(torch.tensor(self.azimuth))
         
-        x = self.radius * np.cos(elev_rad) * np.cos(azim_rad)
-        y = self.radius * np.cos(elev_rad) * np.sin(azim_rad)
-        z = self.radius * np.sin(elev_rad)
+        x = self.radius * torch.cos(elev_rad) * torch.cos(azim_rad)
+        y = self.radius * torch.cos(elev_rad) * torch.sin(azim_rad)
+        z = self.radius * torch.sin(elev_rad)
         
         # 构造视图矩阵
-        camera_pos = np.array([x, y, z])
-        target = np.array([self.center_x, self.center_y, self.center_z])
-        up = np.array([0, 0, 1])
+        camera_pos = torch.tensor([x, y, z], dtype=torch.float32)
+        target = torch.tensor([self.center_x, self.center_y, self.center_z], dtype=torch.float32)
+        up = torch.tensor([0, 0, 1], dtype=torch.float32)
         
         # Look-at矩阵
         forward = target - camera_pos
-        forward = forward / (np.linalg.norm(forward) + 1e-8)
+        forward = forward / (torch.linalg.norm(forward) + 1e-8)
         
-        right = np.cross(forward, up)
-        right = right / (np.linalg.norm(right) + 1e-8)
+        right = torch.linalg.cross(forward, up)
+        right = right / (torch.linalg.norm(right) + 1e-8)
         
-        up = np.cross(right, forward)
+        up = torch.linalg.cross(right, forward)
         
-        view_matrix = np.eye(4)
+        view_matrix = torch.eye(4, dtype=torch.float32)
         view_matrix[:3, 0] = right
         view_matrix[:3, 1] = up
         view_matrix[:3, 2] = -forward
         view_matrix[:3, 3] = camera_pos
         
-        return view_matrix.astype(np.float32)
+        return view_matrix
     
     def __str__(self) -> str:
         return f"CameraPose(elev={self.elevation:.1f}°, azim={self.azimuth:.1f}°, r={self.radius:.2f}, center=({self.center_x:.2f}, {self.center_y:.2f}, {self.center_z:.2f}))"
@@ -102,7 +103,7 @@ class DataPair:
     def load_mesh(self) -> trimesh.Trimesh:
         """加载mesh对象"""
         if not Path(self.mesh_path).exists():
-            raise FileNotFoundError(f"Mesh文件不存在: {self.mesh_path}")
+            raise FileNotFoundError(f"Mesh file not found: {self.mesh_path}")
         
         loaded = trimesh.load(self.mesh_path)
         
@@ -115,7 +116,7 @@ class DataPair:
             # 直接是Mesh对象
             return loaded
         else:
-            raise ValueError(f"无法从文件中提取mesh: {self.mesh_path}")
+            raise ValueError(f"Could not extract mesh from file: {self.mesh_path}")
 
 class DataManager:
     """数据发现和验证管理器"""
@@ -175,122 +176,116 @@ class GeometryUtils:
         poses = []
         for _ in range(num_samples):
             # 等面积采样
-            u, v = np.random.random(2)
-            elevation = np.degrees(np.arcsin(2 * u - 1))  # [-90°, 90°]
+            u, v = torch.rand(2)
+            elevation = torch.rad2deg(torch.asin(2 * u - 1))  # [-90°, 90°]
             azimuth = 360 * v  # [0°, 360°]
             
             # 距离采样 (平方根分布)
-            radius = 1.0 + 4.0 * np.sqrt(np.random.random())
+            radius = 1.0 + 4.0 * torch.sqrt(torch.rand(1))
             
             # 轻微的中心点随机化
-            center_x = np.random.uniform(-0.5, 0.5)
-            center_y = np.random.uniform(-0.5, 0.5)
-            center_z = np.random.uniform(-0.5, 0.5)
+            center_x = torch.rand(1) * 1.0 - 0.5  # [-0.5, 0.5]
+            center_y = torch.rand(1) * 1.0 - 0.5
+            center_z = torch.rand(1) * 1.0 - 0.5
             
             poses.append(CameraPose(
-                elevation=elevation,
-                azimuth=azimuth,
-                radius=radius,
-                center_x=center_x,
-                center_y=center_y,
-                center_z=center_z
+                elevation=elevation.item(),
+                azimuth=azimuth.item(),
+                radius=radius.item(),
+                center_x=center_x.item(),
+                center_y=center_y.item(),
+                center_z=center_z.item()
             ))
         
         return poses
     
     @staticmethod
-    def align_pointclouds_simple(reference_pc: np.ndarray, 
-                               rendered_pcs: List[np.ndarray],
+    def align_pointclouds_simple(reference_pc: torch.Tensor, 
+                               rendered_pcs: List[torch.Tensor],
                                poses: List[CameraPose]) -> Optional[CameraPose]:
-        """简化点云对齐"""
-        if not rendered_pcs or not poses:
+        """简化的点云对齐方法"""
+        if len(rendered_pcs) == 0:
             return None
-            
+        
+        reference_pc = GeometryUtils._clean_pointcloud(reference_pc)
+        if reference_pc is None:
+            return None
+        
         best_pose = None
         best_score = float('inf')
         
-        # 预处理参考点云
-        ref_pc_clean = GeometryUtils._clean_pointcloud(reference_pc)
-        if ref_pc_clean is None or len(ref_pc_clean) == 0:
-            return poses[0] if poses else None
-        
-        for rendered_pc, pose in zip(rendered_pcs, poses):
-            if rendered_pc is None:
+        for pc, pose in zip(rendered_pcs, poses):
+            pc = GeometryUtils._clean_pointcloud(pc)
+            if pc is None:
                 continue
-                
-            # 清理渲染点云
-            rend_pc_clean = GeometryUtils._clean_pointcloud(rendered_pc)
-            if rend_pc_clean is None or len(rend_pc_clean) == 0:
-                continue
-                
-            # 简单的Chamfer距离对齐
-            score = GeometryUtils._chamfer_distance(ref_pc_clean, rend_pc_clean)
+            
+            score = GeometryUtils._chamfer_distance(reference_pc, pc)
             if score < best_score:
                 best_score = score
                 best_pose = pose
         
-        return best_pose if best_pose else (poses[0] if poses else None)
+        return best_pose
     
     @staticmethod
-    def _clean_pointcloud(pc: np.ndarray) -> Optional[np.ndarray]:
-        """清理点云数据，确保正确的格式"""
+    def _clean_pointcloud(pc: torch.Tensor) -> Optional[torch.Tensor]:
+        """清理点云数据，移除无效点"""
         if pc is None:
             return None
-            
-        # 确保是numpy数组
-        if not isinstance(pc, np.ndarray):
+        
+        # 统一转换为tensor
+        if not isinstance(pc, torch.Tensor):
+            if hasattr(pc, 'shape') and hasattr(pc, 'astype'):
+                # numpy array
+                pc = torch.from_numpy(pc.astype('float32'))
+            else:
+                return None
+        
+        # 检查形状
+        if pc.dim() != 2 or pc.shape[1] != 3:
             return None
         
-        # 处理不同的维度情况
-        if len(pc.shape) == 4:  # (1, H, W, 3)
-            pc = pc[0]  # 去掉batch维度
-        
-        if len(pc.shape) == 3:  # (H, W, 3)
-            # 重塑为 (H*W, 3)
-            pc = pc.reshape(-1, 3)
-        
-        if len(pc.shape) != 2 or pc.shape[1] != 3:
+        # 检查大小
+        if pc.shape[0] < 10:
             return None
         
-        # 移除无效点 (NaN, inf等)
-        valid_mask = np.isfinite(pc).all(axis=1)
-        pc_clean = pc[valid_mask]
+        # 移除无效值
+        valid_mask = torch.isfinite(pc).all(dim=1)
+        pc = pc[valid_mask]
         
-        if len(pc_clean) == 0:
+        if pc.shape[0] < 10:
             return None
-            
-        return pc_clean
+        
+        return pc
     
     @staticmethod
-    def _chamfer_distance(pc1: np.ndarray, pc2: np.ndarray) -> float:
-        """Chamfer距离计算"""
-        if pc1 is None or pc2 is None or len(pc1) == 0 or len(pc2) == 0:
+    def _chamfer_distance(pc1: torch.Tensor, pc2: torch.Tensor) -> float:
+        """计算倒角距离"""
+        if pc1.shape[0] == 0 or pc2.shape[0] == 0:
             return float('inf')
         
-        # 确保都是2D数组
-        if len(pc1.shape) != 2 or len(pc2.shape) != 2:
-            return float('inf')
-        
-        if pc1.shape[1] != 3 or pc2.shape[1] != 3:
-            return float('inf')
+        # 确保在同一设备上
+        device = pc1.device
+        pc2 = pc2.to(device)
         
         # 采样以提高效率
-        if len(pc1) > 1000:
-            indices = np.random.choice(len(pc1), 1000, replace=False)
+        if pc1.shape[0] > 1000:
+            indices = torch.randperm(pc1.shape[0])[:1000]
             pc1 = pc1[indices]
-        if len(pc2) > 1000:
-            indices = np.random.choice(len(pc2), 1000, replace=False)
+        
+        if pc2.shape[0] > 1000:
+            indices = torch.randperm(pc2.shape[0])[:1000]
             pc2 = pc2[indices]
         
-        # Chamfer距离
-        try:
-            dist_matrix = cdist(pc1, pc2)
-            forward = np.mean(np.min(dist_matrix, axis=1))
-            backward = np.mean(np.min(dist_matrix, axis=0))
-            return forward + backward
-        except Exception as e:
-            print(f"Chamfer距离计算失败: {e}")
-            return float('inf')
+        # 计算距离矩阵
+        # pc1: (N, 3), pc2: (M, 3)
+        # dist_matrix: (N, M)
+        dist_matrix = torch.cdist(pc1, pc2)
+        
+        # 倒角距离
+        forward = torch.mean(torch.min(dist_matrix, dim=1)[0])
+        backward = torch.mean(torch.min(dist_matrix, dim=0)[0])
+        
+        return (forward + backward).item() / 2.0
 
 class MeshRenderer:
     """Mesh渲染器 - 基于StandardKiuiRenderer"""
@@ -312,14 +307,14 @@ class MeshRenderer:
             from kiui.cam import OrbitCamera
             self.kiui_available = True
         except ImportError:
-            raise ImportError("KiuiKit不可用，请安装kiui包")
+            raise ImportError("KiuiKit not available, please install kiui package")
         
         try:
             # 检查nvdiffrast
             import nvdiffrast.torch as dr
             self.nvdiffrast_available = True
         except ImportError:
-            raise ImportError("nvdiffrast不可用，请安装nvdiffrast包")
+            raise ImportError("nvdiffrast not available, please install nvdiffrast package")
         
         try:
             # 检查StandardKiuiRenderer
@@ -327,7 +322,7 @@ class MeshRenderer:
             from kiui_mesh_renderer import StandardKiuiRenderer
             self.renderer_available = True
         except ImportError:
-            raise ImportError("StandardKiuiRenderer不可用，请检查路径设置")
+            raise ImportError("StandardKiuiRenderer not available, please check path settings")
     
     @property
     def renderer(self):
@@ -366,10 +361,10 @@ class MeshRenderer:
         if not self._mesh_loaded or self.renderer.mesh_path_loaded != mesh_path:
             loaded_mesh = self.renderer.load_mesh(mesh_path)
             if loaded_mesh is None:
-                raise RuntimeError(f"无法加载mesh到渲染器: {mesh_path}")
+                raise RuntimeError(f"Could not load mesh to renderer: {mesh_path}")
             self._mesh_loaded = True
     
-    def render_single_view(self, mesh: trimesh.Trimesh, pose: CameraPose) -> np.ndarray:
+    def render_single_view(self, mesh: trimesh.Trimesh, pose: CameraPose) -> torch.Tensor:
         """渲染单个视图"""
         # 准备mesh
         mesh_path = self.prepare_mesh(mesh)
@@ -385,11 +380,11 @@ class MeshRenderer:
         )
         
         if rendered_img is None:
-            raise RuntimeError(f"渲染失败: {pose}")
+            raise RuntimeError(f"Rendering failed: {pose}")
         
         return rendered_img
     
-    def render_batch_views(self, mesh: trimesh.Trimesh, poses: List[CameraPose]) -> List[np.ndarray]:
+    def render_batch_views(self, mesh: trimesh.Trimesh, poses: List[CameraPose]) -> List[torch.Tensor]:
         """批量渲染多个视图"""
         # 准备mesh
         mesh_path = self.prepare_mesh(mesh)
@@ -416,7 +411,7 @@ class MeshRenderer:
         valid_images = []
         for i, img in enumerate(rendered_images):
             if img is None:
-                raise RuntimeError(f"批量渲染失败: pose {i}")
+                raise RuntimeError(f"Batch rendering failed: pose {i}")
             valid_images.append(img)
         
         return valid_images
@@ -449,7 +444,8 @@ class CleanV2M4CameraSearch:
             
             # 模型选择配置
             'use_vggt': False,                   # 是否使用VGGT模型 (False=DUSt3R, True=VGGT)
-            'model_name': 'dust3r'               # 模型名称标识
+            'model_name': 'dust3r',              # 模型名称标识
+            'skip_model_step': False             # 是否跳过模型估计步骤
         }
         
         # 延迟初始化组件
@@ -497,17 +493,27 @@ class CleanV2M4CameraSearch:
     
     @property
     def optimizer(self):
-        """延迟初始化优化器"""
+        """优化器 - 懒加载"""
         if self._optimizer is None:
-            from .optimizer import PSO_GD_Optimizer
-            # 传递优化后的配置参数
-            self._optimizer = PSO_GD_Optimizer(
-                pso_particles=self.config['pso_particles'],
-                pso_iterations=self.config['pso_iterations'],
-                pso_w=self.config['pso_w'],
-                pso_c1=self.config['pso_c1'],
-                grad_iterations=self.config['grad_iterations']
-            )
+            from .optimizer import OptimizerManager
+            
+            # 使用优化后的PSO参数
+            pso_params = {
+                'num_particles': self.config['pso_particles'],
+                'max_iterations': self.config['pso_iterations'], 
+                'w': 0.6,      # 优化：惯性权重 0.7→0.6
+                'c1': 1.0,     # 优化：个体学习因子 1.5→1.0
+                'c2': 1.5      # 保持：社会学习因子
+            }
+            
+            gd_params = {
+                'learning_rate': 0.01,
+                'max_iterations': self.config['grad_iterations'],
+                'tolerance': 1e-6
+            }
+            
+            self._optimizer = OptimizerManager(pso_params=pso_params, gd_params=gd_params)
+        
         return self._optimizer
     
     @property
@@ -515,7 +521,7 @@ class CleanV2M4CameraSearch:
         """延迟初始化可视化器"""
         if self._visualizer is None and self.enable_visualization:
             from .visualization import V2M4Visualizer
-            self._visualizer = V2M4Visualizer()
+            self._visualizer = V2M4Visualizer(output_dir="outputs/visualization")
         return self._visualizer
     
     def search_camera_pose(self, data_pair: DataPair, save_visualization: bool = True) -> CameraPose:
@@ -524,14 +530,14 @@ class CleanV2M4CameraSearch:
         import time
         start_time = time.time()
         
-        print(f"🎬 开始V2M4相机搜索算法...")
-        print(f"   场景: {data_pair.scene_name}")
+        print(f"🎬 Starting V2M4 camera search algorithm...")
+        print(f"   Scene: {data_pair.scene_name}")
         print(f"   Mesh: {data_pair.mesh_path}")
-        print(f"   图像: {data_pair.image_path}")
+        print(f"   Image: {data_pair.image_path}")
         
         # 验证数据存在
         if not data_pair.exists():
-            raise FileNotFoundError(f"数据对不完整: {data_pair.scene_name}")
+            raise FileNotFoundError(f"Data pair incomplete: {data_pair.scene_name}")
         
         # 加载数据
         reference_image = self._load_image(data_pair.image_path)
@@ -545,15 +551,15 @@ class CleanV2M4CameraSearch:
                 'faces_count': len(mesh.faces),
                 'bounds': bounds.tolist(),
                 'center': mesh.centroid.tolist(),
-                'scale': float(np.linalg.norm(bounds[1] - bounds[0]))
+                'scale': float(torch.linalg.norm(torch.from_numpy(bounds[1] - bounds[0]).float()))
             }
         
         # 步骤1: 采样初始相机pose
-        print("📐 步骤1: 球面采样相机姿态...")
+        print("📐 Step 1: Sphere sampling camera poses...")
         initial_poses = self._sample_sphere_poses()
         
         # 步骤2: 渲染并选择top-n
-        print("🎯 步骤2: 选择top-n候选姿态...")
+        print("🎯 Step 2: Selecting top-n candidate poses...")
         top_poses = self._select_top_poses(mesh, reference_image, initial_poses)
         
         # 可视化：记录top-1姿态
@@ -569,7 +575,10 @@ class CleanV2M4CameraSearch:
             })
         
         # 步骤3-4: 模型估计 (几何约束 - DUSt3R或VGGT)
-        print(f"🔍 步骤3-4: {self.config['model_name'].upper()}几何约束估计...")
+        if self.config.get('skip_model_step', False):
+            print(f"🔄 Step 3-4: Skipping model estimation step...")
+        else:
+            print(f"🔍 Step 3-4: {self.config['model_name'].upper()} geometric constraint estimation...")
         model_pose = self._model_estimation(mesh, reference_image, top_poses)
         
         # 可视化：记录模型结果
@@ -585,7 +594,7 @@ class CleanV2M4CameraSearch:
             })
         
         # 步骤5-6: PSO搜索
-        print("🔍 步骤5-6: PSO粒子群优化...")
+        print("🔍 Step 5-6: PSO particle swarm optimization...")
         pso_pose = self._pso_search(mesh, reference_image, model_pose, top_poses)
         
         # 可视化：记录PSO结果
@@ -601,7 +610,7 @@ class CleanV2M4CameraSearch:
             })
         
         # 步骤7-8: 梯度下降精化
-        print("🎯 步骤7-8: 梯度下降精化...")
+        print("🎯 Step 7-8: Gradient descent refinement...")
         final_pose = self._gradient_refinement(mesh, reference_image, pso_pose)
         
         # 计算执行时间
@@ -632,10 +641,15 @@ class CleanV2M4CameraSearch:
             try:
                 # 创建结果对比图
                 final_rendered = self.renderer.render_single_view(mesh, final_pose)
+                
+                # 转换tensor为numpy数组供可视化使用
+                ref_img_np = self._tensor_to_numpy(reference_image)
+                rendered_img_np = self._tensor_to_numpy(final_rendered)
+                
                 comparison_path = self.visualizer.create_result_comparison(
                     data_pair=data_pair,
-                    reference_image=reference_image,
-                    rendered_result=final_rendered,
+                    reference_image=ref_img_np,
+                    rendered_result=rendered_img_np,
                     final_pose=final_pose,
                     mesh_info=self.visualization_data['mesh_info'],
                     algorithm_stats=self.visualization_data['algorithm_stats'],
@@ -644,44 +658,54 @@ class CleanV2M4CameraSearch:
                 
                 # 创建优化过程可视化
                 if self.visualization_data['progression']:
+                    # 转换progression数据中的图像
+                    progression_data_np = []
+                    for step_data in self.visualization_data['progression']:
+                        step_data_np = step_data.copy()
+                        if 'rendered_image' in step_data_np and step_data_np['rendered_image'] is not None:
+                            step_data_np['rendered_image'] = self._tensor_to_numpy(step_data_np['rendered_image'])
+                        progression_data_np.append(step_data_np)
+                    
                     progression_path = self.visualizer.create_pose_progression_visualization(
                         data_pair=data_pair,
-                        reference_image=reference_image,
-                        progression_data=self.visualization_data['progression'],
+                        reference_image=ref_img_np,
+                        progression_data=progression_data_np,
                         final_pose=final_pose
                     )
                 
                 # 保存单独的结果图像
                 individual_paths = self.visualizer.save_individual_results(
                     data_pair=data_pair,
-                    reference_image=reference_image,
-                    rendered_result=final_rendered
+                    reference_image=ref_img_np,
+                    rendered_result=rendered_img_np
                 )
                 
             except Exception as e:
-                print(f"⚠️ 可视化生成失败: {e}")
+                print(f"⚠️ Visualization generation failed: {e}")
         
-        print("✅ V2M4相机搜索完成!")
-        print(f"⏱️ 总耗时: {execution_time:.2f}秒")
+        print("✅ V2M4 camera search completed!")
+        print(f"⏱️ Total execution time: {execution_time:.2f} seconds")
         
         return final_pose
     
-    def _load_image(self, image_path: str) -> np.ndarray:
+    def _load_image(self, image_path: str) -> torch.Tensor:
         """加载图像文件"""
         image = cv2.imread(image_path)
         if image is None:
-            raise ValueError(f"无法加载图像: {image_path}")
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            raise ValueError(f"Could not load image: {image_path}")
+        # 转换为RGB并确保数据类型为float32，范围[0,255]
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return torch.from_numpy(rgb_image.astype(np.float32))
     
     def _sample_sphere_poses(self) -> List[CameraPose]:
         """步骤1: 球面等面积采样"""
         return GeometryUtils.sample_sphere_poses(self.config['initial_samples'])
     
-    def _select_top_poses(self, mesh: trimesh.Trimesh, reference_image: np.ndarray, 
+    def _select_top_poses(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor, 
                          poses: List[CameraPose]) -> List[CameraPose]:
         """步骤2: 基于相似度选择top-n - 优化批量渲染以避免nvdiffrast卡住"""
         
-        print(f"   正在评估 {len(poses)} 个候选姿态...")
+        print(f"   Evaluating {len(poses)} candidate poses...")
         
         scores = []
         batch_size = self.config['render_batch_size']  # 使用配置的批量渲染大小
@@ -690,7 +714,7 @@ class CleanV2M4CameraSearch:
             # 尝试批量渲染
             for i in range(0, len(poses), batch_size):
                 batch_poses = poses[i:i+batch_size]
-                print(f"   批量渲染 {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
+                print(f"   Batch rendering {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
                 
                 try:
                     # 批量渲染这一组
@@ -705,7 +729,7 @@ class CleanV2M4CameraSearch:
                             scores.append(float('inf'))  # 渲染失败，给最差分数
                             
                 except Exception as e:
-                    print(f"   ⚠️ 批量渲染失败，切换到逐个渲染: {e}")
+                    print(f"   ⚠️ Batch rendering failed, switching to sequential rendering: {e}")
                     # 批量渲染失败，逐个渲染这一组
                     for pose in batch_poses:
                         try:
@@ -713,7 +737,7 @@ class CleanV2M4CameraSearch:
                             score = self._compute_similarity(reference_image, rendered_img)
                             scores.append(score)
                         except Exception as e2:
-                            print(f"   ⚠️ 单个渲染也失败: {e2}")
+                            print(f"   ⚠️ Single rendering also failed: {e2}")
                             scores.append(float('inf'))
                 
                 # 清理GPU内存
@@ -721,7 +745,7 @@ class CleanV2M4CameraSearch:
                 cleanup_gpu_memory()
                 
         except Exception as e:
-            print(f"   ❌ 批量渲染完全失败，使用顺序渲染: {e}")
+            print(f"   ❌ Batch rendering failed completely, using sequential rendering: {e}")
             # 完全回退到顺序渲染
             scores = []
             for i, pose in enumerate(poses):
@@ -732,7 +756,7 @@ class CleanV2M4CameraSearch:
                     score = self._compute_similarity(reference_image, rendered_img)
                     scores.append(score)
                 except Exception as e2:
-                    print(f"   ⚠️ 渲染姿态 {i} 失败: {e2}")
+                    print(f"   ⚠️ Rendering pose {i} failed: {e2}")
                     scores.append(float('inf'))
                 
                 # 每50个姿态清理一次内存
@@ -742,20 +766,26 @@ class CleanV2M4CameraSearch:
         
         # 选择top-n
         if len(scores) != len(poses):
-            print(f"   ⚠️ 分数数量({len(scores)})与姿态数量({len(poses)})不匹配")
+            print(f"   ⚠️ Score count ({len(scores)}) does not match pose count ({len(poses)})")
             scores = scores[:len(poses)] + [float('inf')] * (len(poses) - len(scores))
         
-        top_indices = np.argsort(scores)[:self.config['top_n']]
+        top_indices = torch.argsort(torch.tensor(scores))[:self.config['top_n']].tolist()
         selected_poses = [poses[i] for i in top_indices]
         
-        print(f"   ✅ 选择了 {len(selected_poses)} 个最佳姿态")
-        print(f"   最佳分数: {min(scores):.4f}")
+        print(f"   ✅ Selected {len(selected_poses)} best poses")
+        print(f"   Best score: {min(scores):.4f}")
         
         return selected_poses
     
-    def _model_estimation(self, mesh: trimesh.Trimesh, reference_image: np.ndarray, 
+    def _model_estimation(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor, 
                          top_poses: List[CameraPose]) -> Optional[CameraPose]:
         """步骤3-4: 模型估计 - 核心几何约束 (DUSt3R或VGGT)"""
+        
+        # 检查是否跳过模型估计步骤
+        if self.config.get('skip_model_step', False):
+            print("   🔄 Skipping model estimation step (as configured)")
+            # 返回最佳的top pose作为模型估计结果
+            return top_poses[0] if top_poses else None
         
         # 1. 渲染top poses
         rendered_views = [self.renderer.render_single_view(mesh, pose) for pose in top_poses]
@@ -777,7 +807,7 @@ class CleanV2M4CameraSearch:
         
         return best_pose
     
-    def _pso_search(self, mesh: trimesh.Trimesh, reference_image: np.ndarray,
+    def _pso_search(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor,
                    model_pose: Optional[CameraPose], top_poses: List[CameraPose]) -> CameraPose:
         """步骤5-6: PSO搜索"""
         
@@ -806,7 +836,7 @@ class CleanV2M4CameraSearch:
         
         return self.optimizer.pso_optimize(objective, candidates, bounds)
     
-    def _gradient_refinement(self, mesh: trimesh.Trimesh, reference_image: np.ndarray,
+    def _gradient_refinement(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor,
                            initial_pose: CameraPose) -> CameraPose:
         """步骤7-8: 梯度下降精化"""
         
@@ -816,7 +846,62 @@ class CleanV2M4CameraSearch:
         
         return self.optimizer.gradient_descent(objective, initial_pose)
     
-    def _compute_similarity(self, img1: np.ndarray, img2: np.ndarray) -> float:
-        """计算图像相似度 - 使用超时保护版本"""
-        from .utils import compute_image_similarity
-        return compute_image_similarity(img1, img2, timeout=10)  # 10秒超时 
+    def _compute_similarity(self, img1: torch.Tensor, img2) -> float:
+        """计算图像相似度 - 使用纯PyTorch版本避免numpy转换"""
+        from .utils import compute_image_similarity_torch
+        
+        # 统一转换为torch.Tensor
+        if not isinstance(img1, torch.Tensor):
+            img1 = torch.from_numpy(img1).float()
+        
+        if not isinstance(img2, torch.Tensor):
+            import numpy as np
+            img2 = torch.from_numpy(np.array(img2)).float()
+        
+        return compute_image_similarity_torch(img1, img2) 
+
+    def _tensor_to_numpy(self, tensor: torch.Tensor) -> np.ndarray:
+        """将torch.Tensor转换为numpy数组供可视化使用"""
+        if tensor is None:
+            return None
+        
+        if isinstance(tensor, torch.Tensor):
+            img_np = tensor.detach().cpu().numpy()
+        else:
+            img_np = np.array(tensor)
+        
+        # 确保是HWC格式
+        if img_np.ndim == 4:
+            img_np = img_np.squeeze(0)
+        
+        if img_np.shape[0] == 3:  # CHW -> HWC
+            img_np = img_np.transpose(1, 2, 0)
+        
+        # 智能处理数据类型和数值范围
+        if img_np.dtype == np.uint8:
+            # 已经是uint8，直接使用
+            return img_np
+        else:
+            # 检查数值范围来决定如何转换
+            img_min, img_max = img_np.min(), img_np.max()
+            
+            if img_max <= 1.0:
+                # 数值在[0,1]范围，需要乘以255
+                img_np = img_np * 255.0
+            elif img_max <= 255.0:
+                # 数值在[0,255]范围，直接使用
+                pass
+            else:
+                # 数值超出255，需要归一化到[0,255]
+                img_np = (img_np - img_min) / (img_max - img_min) * 255.0
+            
+            # 确保严格的[0,255]范围并转换为uint8
+            # 使用更严格的舍入和clipping来避免精度问题
+            img_np = np.clip(np.round(img_np), 0, 255).astype(np.uint8)
+            
+            # 额外检查：确保没有超出范围的值
+            if img_np.min() < 0 or img_np.max() > 255:
+                # 如果仍然超出范围，进行强制归一化
+                img_np = np.clip(img_np, 0, 255)
+        
+        return img_np 

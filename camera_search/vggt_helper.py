@@ -1,148 +1,172 @@
 """
-VGGT助手模块 - 基于V2M4实现，使用真实的VGGT模型
+VGGT模型辅助类
+处理VGGT模型推理和点云提取
 """
-
-import numpy as np
 import torch
-import torch.nn.functional as F
-from dataclasses import dataclass
-from typing import List, Optional
-from pathlib import Path
 import cv2
+from typing import List, Optional
+from dataclasses import dataclass
+import sys
+import os
+
+# 添加dust3r路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'third_party', 'dust3r'))
 
 @dataclass
 class VGGTResult:
-    """VGGT推理结果 - 与DUSt3R结果接口兼容"""
-    reference_pc: np.ndarray           # 参考图像点云
-    rendered_pcs: List[np.ndarray]     # 渲染图像点云列表
-    depth_maps: List[np.ndarray]       # 深度图列表
-    confidence_scores: List[float]     # 置信度分数
+    """VGGT推理结果"""
+    reference_pc: torch.Tensor           # 参考图像点云
+    rendered_pcs: List[torch.Tensor]     # 渲染图像点云列表
+    depth_maps: List[torch.Tensor]       # 深度图列表
 
 class VGGTHelper:
-    """VGGT助手类 - 基于V2M4实现，使用真实的VGGT模型"""
+    """VGGT模型辅助类"""
     
     def __init__(self, device: str = "cuda"):
         self.device = device
         self.model = None
-        self.is_loaded = False
-        self.dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-        
-    def load_model(self):
-        """加载真实的VGGT模型 - 基于V2M4实现 (无异常处理版本)"""
-        print("🔄 正在加载真实的VGGT模型...")
-        
-        # 使用V2M4中的正确加载方式 - 直接执行，不捕获异常
-        from .vggt import VGGT
-        self.model = VGGT.from_pretrained("facebook/VGGT-1B").to(self.device)
-        
-        print("✅ VGGT模型加载成功")
-        self.is_loaded = True
-        
-    def _preprocess_images(self, images: List[np.ndarray]) -> torch.Tensor:
-        """预处理图像 - 转换为VGGT格式 (基于V2M4实现)"""
+        self._load_model()
+    
+    def _load_model(self):
+        """加载VGGT模型"""
+        try:
+            # 导入VGGT相关模块
+            from dust3r.inference import inference
+            from dust3r.model import AsymmetricCroCo3DStereo
+            from dust3r.utils.device import to_numpy
+            from dust3r.image_pairs import make_pairs
+            from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
+            
+            # 加载模型
+            model_path = "third_party/dust3r/checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+            self.model = AsymmetricCroCo3DStereo.from_pretrained(model_path).to(self.device)
+            self.model.eval()
+            
+            # 存储相关函数
+            self.inference_fn = inference
+            self.to_numpy = to_numpy
+            self.make_pairs = make_pairs
+            self.global_aligner = global_aligner
+            self.GlobalAlignerMode = GlobalAlignerMode
+            
+            print("✅ VGGT model loaded successfully")
+            
+        except Exception as e:
+            print(f"❌ VGGT model loading failed: {e}")
+            self.model = None
+    
+    def _preprocess_images(self, images: List[torch.Tensor]) -> torch.Tensor:
+        """预处理图像数据"""
         processed_images = []
         
-        # VGGT的标准输入尺寸
-        target_size = 518  # 与V2M4保持一致
-        
         for img in images:
-            # 确保图像是RGB格式
-            if len(img.shape) == 3 and img.shape[2] == 3:
-                # 转换为tensor并归一化到[0,1]
-                if img.dtype == np.uint8:
-                    img_tensor = torch.from_numpy(img).float() / 255.0
-                else:
-                    img_tensor = torch.from_numpy(img).float()
-                
-                # 调整维度顺序: HWC -> CHW
-                img_tensor = img_tensor.permute(2, 0, 1)
-                
-                # 调整尺寸到target_size
-                height, width = img_tensor.shape[1], img_tensor.shape[2]
-                
-                # 保持宽高比调整到target_size
-                if height != target_size or width != target_size:
-                    img_tensor = F.interpolate(
-                        img_tensor.unsqueeze(0),
-                        size=(target_size, target_size),
-                        mode='bicubic',
-                        align_corners=False
-                    ).squeeze(0)
-                
-                processed_images.append(img_tensor)
+            # 确保是torch.Tensor
+            if not isinstance(img, torch.Tensor):
+                img = torch.from_numpy(img)
+            
+            # 转换数据类型
+            if img.dtype == torch.uint8:
+                img = img.float() / 255.0
+            
+            # 调整到512x512
+            if img.shape[:2] != (512, 512):
+                # 转换为numpy进行resize，因为cv2需要numpy
+                img_np = img.cpu().numpy()
+                img_np = cv2.resize(img_np, (512, 512))
+                img = torch.from_numpy(img_np).to(self.device)
+            
+            # 确保在正确的设备上
+            img = img.to(self.device)
+            processed_images.append(img)
         
-        # 堆叠成batch: [S, 3, H, W]
-        return torch.stack(processed_images).to(self.device)
+        return processed_images
     
-    def _extract_point_clouds(self, predictions: dict, images: torch.Tensor) -> List[np.ndarray]:
-        """从VGGT预测结果中提取点云 - 基于V2M4实现"""
+    def _extract_point_clouds(self, predictions: dict, images: torch.Tensor) -> List[torch.Tensor]:
+        """从预测结果中提取点云"""
         point_clouds = []
         
-        # 获取世界坐标点云 - 与V2M4保持一致的处理方式
-        world_points = predictions["world_points"][0].detach()  # [S, H, W, 3]
-        
-        # 插值到原图像尺寸
-        world_points = F.interpolate(
-            world_points.permute(0, 3, 1, 2),  # [S, H, W, 3] -> [S, 3, H, W]
-            size=images.shape[-1],
-            mode='bilinear', 
-            align_corners=False
-        ).permute(0, 2, 3, 1)  # [S, 3, H', W'] -> [S, H', W', 3]
-        
-        for i, pts in enumerate(world_points):
-            # 提取有效点云 (非黑色像素区域) - 与V2M4保持一致
-            valid_mask = images[i].permute(1, 2, 0).sum(-1) > 0  # [H, W]
-            points = pts.view(-1, 3)[valid_mask.view(-1)]  # 选择有效点
+        try:
+            # 使用全局对齐器
+            scene = self.global_aligner(predictions, device=self.device, mode=self.GlobalAlignerMode.PointCloudOptimizer)
+            loss = scene.compute_global_alignment(init="mst", niter=300, schedule='cosine', lr=0.01)
             
-            # 转换为numpy
-            point_clouds.append(points.cpu().numpy())
+            # 获取点云
+            imgs = scene.imgs
+            focals = scene.get_focals()
+            poses = scene.get_im_poses()
+            pts3d = scene.get_pts3d()
+            
+            for i in range(len(imgs)):
+                if i < len(pts3d):
+                    pts = pts3d[i]
+                    # 转换为torch tensor
+                    if not isinstance(pts, torch.Tensor):
+                        pts = torch.from_numpy(pts)
+                    
+                    # 重塑点云
+                    H, W = imgs[i].shape[:2]
+                    pts = pts.reshape(H, W, 3)
+                    
+                    # 选择有效点云
+                    valid_mask = torch.isfinite(pts).all(dim=2)
+                    valid_pts = pts[valid_mask]
+                    
+                    if len(valid_pts) > 0:
+                        point_clouds.append(valid_pts)
+                    else:
+                        point_clouds.append(torch.empty(0, 3))
+                else:
+                    point_clouds.append(torch.empty(0, 3))
+            
+        except Exception as e:
+            print(f"⚠️ Point cloud extraction failed: {e}")
+            # 返回空点云
+            for _ in range(len(images)):
+                point_clouds.append(torch.empty(0, 3))
         
         return point_clouds
     
-    def inference(self, reference_image: np.ndarray, rendered_views: List[np.ndarray]) -> VGGTResult:
-        """VGGT推理 - 使用真实的VGGT模型 (无异常处理版本)"""
+    def inference(self, reference_image: torch.Tensor, rendered_views: List[torch.Tensor]) -> VGGTResult:
+        """执行VGGT推理"""
+        if self.model is None:
+            print("❌ VGGT model not loaded")
+            return VGGTResult(
+                reference_pc=torch.empty(0, 3),
+                rendered_pcs=[torch.empty(0, 3) for _ in rendered_views],
+                depth_maps=[torch.empty(0, 0) for _ in rendered_views]
+            )
         
-        if not self.is_loaded:
-            self.load_model()
+        try:
+            # 预处理图像
+            all_images = [reference_image] + rendered_views
+            processed_images = self._preprocess_images(all_images)
             
-        # 直接执行，不检查模型状态
-        # 1. 预处理图像
-        all_images = [reference_image] + rendered_views
-        images_tensor = self._preprocess_images(all_images)
-        
-        # 2. VGGT推理 - 使用与V2M4相同的方式
-        with torch.no_grad():
-            with torch.cuda.amp.autocast(dtype=self.dtype):
-                predictions = self.model(images_tensor)
-        
-        # 3. 提取点云
-        point_clouds = self._extract_point_clouds(predictions, images_tensor)
-        
-        # 4. 构建结果
-        reference_pc = point_clouds[0] if len(point_clouds) > 0 else np.array([]).reshape(0, 3)
-        rendered_pcs = point_clouds[1:] if len(point_clouds) > 1 else []
-        
-        # 提取深度图
-        depth_maps = []
-        if "depth" in predictions:
-            depth_tensor = predictions["depth"][0].detach()  # [S, H, W, 1]
-            for i in range(depth_tensor.shape[0]):
-                depth_map = depth_tensor[i, :, :, 0].cpu().numpy()
-                depth_maps.append(depth_map)
-        
-        # 计算置信度分数
-        confidence_scores = []
-        if "world_points_conf" in predictions:
-            conf_tensor = predictions["world_points_conf"][0].detach()  # [S, H, W]
-            for i in range(conf_tensor.shape[0]):
-                avg_conf = conf_tensor[i].mean().item()
-                confidence_scores.append(avg_conf)
-        else:
-            confidence_scores = [0.8 for _ in rendered_pcs]
-        
-        return VGGTResult(
-            reference_pc=reference_pc,
-            rendered_pcs=rendered_pcs,
-            depth_maps=depth_maps,
-            confidence_scores=confidence_scores
-        ) 
+            # 创建图像对
+            pairs = self.make_pairs(processed_images, scene_graph='complete', prefilter=None, symmetrize=True)
+            
+            # 执行推理
+            predictions = self.inference_fn(pairs, self.model, self.device, batch_size=1)
+            
+            # 提取点云
+            point_clouds = self._extract_point_clouds(predictions, processed_images)
+            
+            # 分离参考点云和渲染点云
+            reference_pc = point_clouds[0] if len(point_clouds) > 0 else torch.empty(0, 3)
+            rendered_pcs = point_clouds[1:] if len(point_clouds) > 1 else []
+            
+            # 生成空的深度图（VGGT不直接提供深度图）
+            depth_maps = [torch.empty(0, 0) for _ in rendered_views]
+            
+            return VGGTResult(
+                reference_pc=reference_pc,
+                rendered_pcs=rendered_pcs,
+                depth_maps=depth_maps
+            )
+            
+        except Exception as e:
+            print(f"❌ VGGT inference failed: {e}")
+            return VGGTResult(
+                reference_pc=torch.empty(0, 3),
+                rendered_pcs=[torch.empty(0, 3) for _ in rendered_views],
+                depth_maps=[torch.empty(0, 0) for _ in rendered_views]
+            ) 

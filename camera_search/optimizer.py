@@ -1,206 +1,233 @@
 """
 优化器模块
-包含PSO粒子群优化和梯度下降优化
+包含PSO和梯度下降优化器
 """
 
-import numpy as np
 import torch
-import torch.optim as optim
 import random
-from typing import List, Callable, Dict, Tuple
+from typing import List, Callable, Tuple, Dict, Any
 from .core import CameraPose
 
-class PSO_GD_Optimizer:
-    """PSO + 梯度下降优化器 - 基于原始v2m4实现"""
+class PSOOptimizer:
+    """粒子群优化器"""
     
-    def __init__(self, pso_particles=80, pso_iterations=20, pso_w=0.6, pso_c1=1.0, pso_c2=1.5, grad_iterations=200):
-        # PSO配置 - 基于性能测试优化后的参数，支持自定义
-        self.pso_config = {
-            'particles': pso_particles,   # 优化: 50→80 (提升到0.927 SSIM)
-            'iterations': pso_iterations, # 保持20次迭代
-            'w': pso_w,                  # 惯性权重 - 优化: 0.7→0.6 (提升到0.927 SSIM)
-            'c1': pso_c1,                # 个体学习因子 - 优化: 1.5→1.0 (提升到0.926 SSIM)
-            'c2': pso_c2                 # 社会学习因子 - 保持1.5
-        }
+    def __init__(self, num_particles: int = 30, max_iterations: int = 50, 
+                 w: float = 0.9, c1: float = 2.0, c2: float = 2.0):
+        self.num_particles = num_particles
+        self.max_iterations = max_iterations
+        self.w = w  # 惯性权重
+        self.c1 = c1  # 个体学习因子
+        self.c2 = c2  # 社会学习因子
         
-        # 梯度下降配置 - 增加迭代数，支持自定义
-        self.gd_config = {
-            'iterations': grad_iterations, # 优化: 100→200 (提升性能)
-            'lr': 0.01
-        }
-    
-    def pso_optimize(self, 
-                    objective_func: Callable[[CameraPose], float],
-                    initial_poses: List[CameraPose], 
-                    bounds: Dict[str, Tuple[float, float]]) -> CameraPose:
-        """PSO优化相机pose - 基于原始实现"""
+    def optimize(self, objective_func: Callable[[CameraPose], float], 
+                candidates: List[CameraPose], 
+                bounds: Dict[str, Tuple[float, float]]) -> CameraPose:
+        """PSO优化"""
         
-        # 初始化粒子
-        particles = []
-        velocities = []
-        personal_best = []
-        personal_best_fitness = []
+        # 从候选姿态中选择初始种群
+        if len(candidates) >= self.num_particles:
+            particles = candidates[:self.num_particles]
+        else:
+            particles = candidates + self._generate_random_particles(
+                self.num_particles - len(candidates), bounds)
         
-        # 使用initial_poses初始化部分粒子
-        for pose in initial_poses[:self.pso_config['particles']]:
-            particle = [pose.elevation, pose.azimuth, pose.radius, 
-                       pose.center_x, pose.center_y, pose.center_z]
-            particles.append(particle)
-            velocities.append([0.0] * 6)
-            personal_best.append(particle[:])
-            personal_best_fitness.append(float('inf'))
+        # 初始化速度和个体最优
+        velocities = [self._initialize_velocity() for _ in particles]
+        personal_best = particles.copy()
+        personal_best_scores = [objective_func(p) for p in personal_best]
         
-        # 补充随机粒子
-        while len(particles) < self.pso_config['particles']:
-            particle = []
-            for param, (min_val, max_val) in bounds.items():
-                particle.append(random.uniform(min_val, max_val))
-            particles.append(particle)
-            velocities.append([0.0] * 6)
-            personal_best.append(particles[-1][:])
-            personal_best_fitness.append(float('inf'))
+        # 全局最优
+        global_best_idx = torch.argmin(torch.tensor(personal_best_scores)).item()
+        global_best = personal_best[global_best_idx]
+        global_best_score = personal_best_scores[global_best_idx]
         
-        global_best = None
-        global_best_fitness = float('inf')
-        
-        # PSO主循环
-        for iteration in range(self.pso_config['iterations']):
-            # 添加进度日志
-            if iteration % 5 == 0 or iteration == 0:
-                print(f"      PSO迭代 {iteration+1}/{self.pso_config['iterations']}...")
-            
-            for i in range(len(particles)):
-                # 评估适应度
-                current_particle = particles[i]
-                current_pose = self._particle_to_pose(current_particle)
+        # 迭代优化
+        for iteration in range(self.max_iterations):
+            for i in range(self.num_particles):
+                # 更新速度
+                r1, r2 = torch.rand(2)
                 
-                fitness = objective_func(current_pose)
+                # 计算速度更新
+                inertia = self._multiply_velocity(velocities[i], self.w)
+                cognitive = self._multiply_velocity(
+                    self._subtract_poses(personal_best[i], particles[i]), 
+                    self.c1 * r1)
+                social = self._multiply_velocity(
+                    self._subtract_poses(global_best, particles[i]), 
+                    self.c2 * r2)
+                
+                velocities[i] = self._add_velocities([inertia, cognitive, social])
+                
+                # 更新位置
+                particles[i] = self._add_pose_velocity(particles[i], velocities[i])
+                particles[i] = self._clamp_pose(particles[i], bounds)
+                
+                # 评估新位置
+                score = objective_func(particles[i])
                 
                 # 更新个体最优
-                if fitness < personal_best_fitness[i]:
-                    personal_best_fitness[i] = fitness
-                    personal_best[i] = current_particle[:]
+                if score < personal_best_scores[i]:
+                    personal_best[i] = particles[i]
+                    personal_best_scores[i] = score
                     
                     # 更新全局最优
-                    if fitness < global_best_fitness:
-                        global_best_fitness = fitness
-                        global_best = current_particle[:]
-            
-            # 每次迭代后显示最佳分数
-            if iteration % 5 == 0 or iteration == 0:
-                print(f"        当前最佳分数: {global_best_fitness:.4f}")
-            
-            # 更新速度和位置
-            for i in range(len(particles)):
-                for j in range(6):  # 6个参数: elevation, azimuth, radius, center_x, center_y, center_z
-                    r1, r2 = random.random(), random.random()
-                    
-                    velocities[i][j] = (
-                        self.pso_config['w'] * velocities[i][j] + 
-                        self.pso_config['c1'] * r1 * (personal_best[i][j] - particles[i][j]) +
-                        self.pso_config['c2'] * r2 * (global_best[j] - particles[i][j])
-                    )
-                    
-                    particles[i][j] += velocities[i][j]
-                    
-                    # 边界约束
-                    param_names = ['elevation', 'azimuth', 'radius', 'center_x', 'center_y', 'center_z']
-                    param_name = param_names[j]
-                    if param_name in bounds:
-                        min_val, max_val = bounds[param_name]
-                        particles[i][j] = max(min_val, min(max_val, particles[i][j]))
+                    if score < global_best_score:
+                        global_best = particles[i]
+                        global_best_score = score
         
-        # 返回最佳pose
-        if global_best is None:
-            raise RuntimeError("PSO优化失败，未找到有效解")
-        
-        return self._particle_to_pose(global_best)
+        return global_best
     
-    def gradient_descent(self, 
-                        objective_func: Callable[[CameraPose], float],
-                        initial_pose: CameraPose) -> CameraPose:
-        """梯度下降优化 - 基于原始实现"""
-        
-        # 转换为tensor (角度转换为弧度)
-        pose_params = torch.tensor([
-            np.radians(initial_pose.elevation), 
-            np.radians(initial_pose.azimuth), 
-            initial_pose.radius,
-            initial_pose.center_x, 
-            initial_pose.center_y, 
-            initial_pose.center_z
-        ], requires_grad=True)
-        
-        optimizer = optim.Adam([pose_params], lr=self.gd_config['lr'])
-        
-        best_loss = float('inf')
-        best_params = pose_params.clone().detach()
-        no_improvement_count = 0
-        
-        for iteration in range(self.gd_config['iterations']):
-            optimizer.zero_grad()
-            
-            # 从参数构造pose (转换回角度) - 修复tensor转换
-            current_pose = CameraPose(
-                elevation=float(pose_params[0].detach().cpu().numpy()) * 180.0 / np.pi,
-                azimuth=float(pose_params[1].detach().cpu().numpy()) * 180.0 / np.pi,
-                radius=float(pose_params[2].detach().cpu().numpy()),
-                center_x=float(pose_params[3].detach().cpu().numpy()),
-                center_y=float(pose_params[4].detach().cpu().numpy()),
-                center_z=float(pose_params[5].detach().cpu().numpy())
+    def _generate_random_particles(self, num: int, bounds: Dict[str, Tuple[float, float]]) -> List[CameraPose]:
+        """生成随机粒子"""
+        particles = []
+        for _ in range(num):
+            pose = CameraPose(
+                elevation=torch.rand(1).item() * (bounds['elevation'][1] - bounds['elevation'][0]) + bounds['elevation'][0],
+                azimuth=torch.rand(1).item() * (bounds['azimuth'][1] - bounds['azimuth'][0]) + bounds['azimuth'][0],
+                radius=torch.rand(1).item() * (bounds['radius'][1] - bounds['radius'][0]) + bounds['radius'][0]
             )
-            
-            # 计算损失
-            loss = objective_func(current_pose)
-            loss_tensor = torch.tensor(loss, requires_grad=True)
-            
-            # 反向传播
-            loss_tensor.backward()
-            optimizer.step()
-            
-            # 边界约束 (弧度空间)
-            with torch.no_grad():
-                pose_params[0] = torch.clamp(pose_params[0], np.radians(-90), np.radians(90))  # elevation
-                pose_params[1] = torch.clamp(pose_params[1], 0, np.radians(360))  # azimuth
-                pose_params[2] = torch.clamp(pose_params[2], 1.0, 5.0)  # radius
-                pose_params[3:] = torch.clamp(pose_params[3:], -1.0, 1.0)  # center
-            
-            # 检查改进
-            if loss < best_loss:
-                best_loss = loss
-                best_params = pose_params.clone().detach()
-                no_improvement_count = 0
-            else:
-                no_improvement_count += 1
-            
-            # 早停机制
-            if no_improvement_count > 30:
-                print(f"      早停: {iteration}次迭代后无改进")
-                break
-            
-            if iteration % 20 == 0:
-                print(f"      迭代 {iteration}, loss: {loss:.6f}")
-        
-        # 返回最佳pose (转换回角度) - 修复tensor转换
-        final_pose = CameraPose(
-            elevation=float(best_params[0].detach().cpu().numpy()) * 180.0 / np.pi,
-            azimuth=float(best_params[1].detach().cpu().numpy()) * 180.0 / np.pi,
-            radius=float(best_params[2].detach().cpu().numpy()),
-            center_x=float(best_params[3].detach().cpu().numpy()),
-            center_y=float(best_params[4].detach().cpu().numpy()),
-            center_z=float(best_params[5].detach().cpu().numpy())
-        )
-        
-        print(f"    ✅ 梯度下降完成，最终loss: {best_loss:.6f}")
-        return final_pose
+            particles.append(pose)
+        return particles
     
-    def _particle_to_pose(self, particle: List[float]) -> CameraPose:
-        """粒子转换为姿态"""
+    def _initialize_velocity(self) -> Dict[str, float]:
+        """初始化速度"""
+        return {
+            'elevation': torch.randn(1).item() * 2.0,
+            'azimuth': torch.randn(1).item() * 5.0,
+            'radius': torch.randn(1).item() * 0.5
+        }
+    
+    def _multiply_velocity(self, velocity: Dict[str, float], factor: float) -> Dict[str, float]:
+        """速度乘以因子"""
+        return {k: v * factor for k, v in velocity.items()}
+    
+    def _subtract_poses(self, pose1: CameraPose, pose2: CameraPose) -> Dict[str, float]:
+        """计算姿态差异"""
+        return {
+            'elevation': pose1.elevation - pose2.elevation,
+            'azimuth': pose1.azimuth - pose2.azimuth,
+            'radius': pose1.radius - pose2.radius
+        }
+    
+    def _add_velocities(self, velocities: List[Dict[str, float]]) -> Dict[str, float]:
+        """速度相加"""
+        result = {'elevation': 0.0, 'azimuth': 0.0, 'radius': 0.0}
+        for vel in velocities:
+            for k in result:
+                result[k] += vel[k]
+        return result
+    
+    def _add_pose_velocity(self, pose: CameraPose, velocity: Dict[str, float]) -> CameraPose:
+        """姿态加速度"""
         return CameraPose(
-            elevation=particle[0],
-            azimuth=particle[1],
-            radius=particle[2],
-            center_x=particle[3],
-            center_y=particle[4],
-            center_z=particle[5]
-        ) 
+            elevation=pose.elevation + velocity['elevation'],
+            azimuth=pose.azimuth + velocity['azimuth'],
+            radius=pose.radius + velocity['radius']
+        )
+    
+    def _clamp_pose(self, pose: CameraPose, bounds: Dict[str, Tuple[float, float]]) -> CameraPose:
+        """限制姿态范围"""
+        return CameraPose(
+            elevation=max(bounds['elevation'][0], min(bounds['elevation'][1], pose.elevation)),
+            azimuth=max(bounds['azimuth'][0], min(bounds['azimuth'][1], pose.azimuth)),
+            radius=max(bounds['radius'][0], min(bounds['radius'][1], pose.radius))
+        )
+
+class GradientDescentOptimizer:
+    """梯度下降优化器"""
+    
+    def __init__(self, learning_rate: float = 0.01, max_iterations: int = 100, 
+                 tolerance: float = 1e-6):
+        self.learning_rate = learning_rate
+        self.max_iterations = max_iterations
+        self.tolerance = tolerance
+        
+    def optimize(self, objective_func: Callable[[CameraPose], float], 
+                initial_pose: CameraPose) -> CameraPose:
+        """梯度下降优化"""
+        
+        current_pose = initial_pose
+        
+        for iteration in range(self.max_iterations):
+            # 计算梯度
+            gradient = self._compute_gradient(objective_func, current_pose)
+            
+            # 计算梯度范数
+            grad_norm = torch.sqrt(torch.tensor(gradient['elevation']**2 + 
+                                              gradient['azimuth']**2 + 
+                                              gradient['radius']**2))
+            
+            # 检查收敛
+            if grad_norm < self.tolerance:
+                break
+                
+            # 更新参数
+            current_pose = CameraPose(
+                elevation=current_pose.elevation - self.learning_rate * gradient['elevation'],
+                azimuth=current_pose.azimuth - self.learning_rate * gradient['azimuth'],
+                radius=current_pose.radius - self.learning_rate * gradient['radius']
+            )
+        
+        return current_pose
+    
+    def _compute_gradient(self, objective_func: Callable[[CameraPose], float], 
+                         pose: CameraPose) -> Dict[str, float]:
+        """数值梯度计算"""
+        epsilon = 1e-5
+        
+        # 基准分数
+        base_score = objective_func(pose)
+        
+        # 计算各参数的梯度
+        gradients = {}
+        
+        # elevation梯度
+        pose_plus = CameraPose(pose.elevation + epsilon, pose.azimuth, pose.radius)
+        gradients['elevation'] = (objective_func(pose_plus) - base_score) / epsilon
+        
+        # azimuth梯度
+        pose_plus = CameraPose(pose.elevation, pose.azimuth + epsilon, pose.radius)
+        gradients['azimuth'] = (objective_func(pose_plus) - base_score) / epsilon
+        
+        # radius梯度
+        pose_plus = CameraPose(pose.elevation, pose.azimuth, pose.radius + epsilon)
+        gradients['radius'] = (objective_func(pose_plus) - base_score) / epsilon
+        
+        return gradients
+
+class OptimizerManager:
+    """优化器管理器"""
+    
+    def __init__(self, pso_params: Dict[str, Any] = None, 
+                 gd_params: Dict[str, Any] = None):
+        
+        # PSO参数
+        pso_defaults = {
+            'num_particles': 30,
+            'max_iterations': 50,
+            'w': 0.9,
+            'c1': 2.0,
+            'c2': 2.0
+        }
+        pso_config = {**pso_defaults, **(pso_params or {})}
+        self.pso = PSOOptimizer(**pso_config)
+        
+        # 梯度下降参数  
+        gd_defaults = {
+            'learning_rate': 0.01,
+            'max_iterations': 100,
+            'tolerance': 1e-6
+        }
+        gd_config = {**gd_defaults, **(gd_params or {})}
+        self.gd = GradientDescentOptimizer(**gd_config)
+    
+    def pso_optimize(self, objective_func: Callable[[CameraPose], float], 
+                    candidates: List[CameraPose], 
+                    bounds: Dict[str, Tuple[float, float]]) -> CameraPose:
+        """PSO优化"""
+        return self.pso.optimize(objective_func, candidates, bounds)
+    
+    def gradient_descent(self, objective_func: Callable[[CameraPose], float], 
+                        initial_pose: CameraPose) -> CameraPose:
+        """梯度下降优化"""
+        return self.gd.optimize(objective_func, initial_pose) 
