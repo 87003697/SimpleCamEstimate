@@ -29,6 +29,7 @@
 - **内存管理**: 小批量渲染策略，GPU内存优化
 - **错误恢复**: 超时保护机制，多级降级处理
 - **SSIM计算**: 解决scipy滤波函数死循环问题
+- **批量大小控制**: 新增`max_batch_size`参数，灵活调节GPU内存和性能 🆕
 
 ### ✅ 可视化系统
 - **结果对比图**: 参考图像 vs 渲染结果对比
@@ -131,14 +132,20 @@ python test.py --scenes 25         # 测试所有25个场景
 # 单场景深度测试
 python test.py --single-scene "1"  # 测试场景"1"
 python test.py --single-scene "dancing_spiderman"
-# VGGT模型测试 🆕
-python test.py --single-scene "dancing_spiderman" --use-vggt
-python test.py --scenes 5 --use-vggt         # VGGT批量测试
+
+# 模型切换测试
+python test.py --single-scene "dancing_spiderman" --use-model dust3r  # 使用DUSt3R
+python test.py --scenes 5 --use-model dust3r         # DUSt3R批量测试
 
 # 性能优化选项
 python test.py --no-visualization  # 禁用可视化，提升速度
 python test.py --cuda-device 1     # 使用CUDA设备1
 python test.py --device cpu        # 使用CPU计算
+
+# 批量渲染大小控制 🆕
+python test.py --max-batch-size 16 # 使用更大批量 (更快，需要更多GPU内存)
+python test.py --max-batch-size 4  # 使用更小批量 (更慢，节省GPU内存)
+python test.py --max-batch-size 32 # 高端GPU最大性能
 
 # 可视化功能测试
 python test.py --test-components    # 测试可视化组件
@@ -151,13 +158,13 @@ python test.py --no-batch-summary  # 禁用批量总结
 python test.py --scenes 3
 
 # 高性能测试 (大GPU)
-python test.py --scenes 10 --cuda-device 2
+python test.py --scenes 10 --cuda-device 2 --max-batch-size 16
 
 # 轻量级测试 (小GPU或调试)
-python test.py --scenes 2 --no-visualization
+python test.py --scenes 2 --no-visualization --max-batch-size 4
 
 # 生产环境测试 (处理所有数据)
-python test.py --scenes 25
+python test.py --scenes 25 --max-batch-size 8
 ```
 
 ### 3. 单场景搜索（推荐）
@@ -177,6 +184,7 @@ best_pose = search_camera_pose(
     dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
     scene_name="dancing_spiderman",
     render_batch_size=32,            # 更大批量，4倍速度提升
+    max_batch_size=16,               # 渲染器最大批量 🆕
     enable_visualization=True
 )
 
@@ -185,14 +193,7 @@ best_pose = search_camera_pose(
     dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
     scene_name="dancing_spiderman", 
     render_batch_size=4,             # 更小批量，避免OOM
-n### 模型切换 ��
-```python
-config = {
-    'use_vggt': False,            # False=DUSt3R, True=VGGT
-    'model_name': 'dust3r',       # 当前模型名称
-    # ... 其他配置
-}
-```
+    max_batch_size=4,                # 渲染器最大批量 🆕
     enable_visualization=True
 )
 
@@ -201,11 +202,11 @@ print(f"  仰角: {best_pose.elevation:.2f}°")
 print(f"  方位角: {best_pose.azimuth:.2f}°") 
 print(f"  距离: {best_pose.radius:.2f}")
 
-# 🆕 使用VGGT模型
+# 🆕 使用DUSt3R模型
 best_pose = search_camera_pose(
     dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
     scene_name="dancing_spiderman",
-    use_vggt=True                    # 切换到VGGT模型
+    use_model='dust3r'               # 使用DUSt3R模型
 )
 ```
 
@@ -217,6 +218,7 @@ from camera_search import batch_search_all_scenes
 results = batch_search_all_scenes(
     dust3r_model_path="models/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
     render_batch_size=16,            # 根据GPU内存调整 (4-32)
+    max_batch_size=8,                # 渲染器最大批量大小 🆕
     enable_visualization=True,
     create_batch_summary=True
 )
@@ -308,6 +310,7 @@ def search_camera_pose(self, data_pair: DataPair) -> CameraPose:
 | **API易用性** | 复杂接口 | 一行调用 | **极简** |
 | **测试覆盖** | 无 | 统一测试脚本 | **质量保证** |
 | **可视化支持** | 无 | 完整可视化 | **全新功能** |
+| **批量渲染优化** | 无 | 可配置批量大小 | **性能提升** 🆕 |
 | **核心功能** | 完整保留 | 完整保留 | **无损失** |
 
 ---
@@ -403,11 +406,21 @@ config = {
     'pso_iterations': 20,         # PSO迭代数
     'grad_iterations': 100,       # 梯度下降迭代数
     'image_size': 512,            # 图像尺寸
-    'render_batch_size': 16       # 批量渲染大小 🆕
+    'render_batch_size': 16,      # 批量渲染大小 
+    'max_batch_size': 8           # 渲染器最大批量大小 🆕
 }
 ```
 
 ### 性能调优参数
+**max_batch_size** - 渲染器最大批量大小，控制Top-N选择和PSO搜索时的批量渲染：
+
+| 批量大小 | 执行时间 | 相对性能 | GPU内存需求 | 适用场景 |
+|---------|---------|---------|------------|----------|
+| **4** | 26.73s | 1.06x慢 | 💾 低内存 | GTX 1080/RTX 3060 |
+| **8** | 28.11s | 1.11x慢 | ⚖️ 平衡 | RTX 3070/4070 (默认) |
+| **16** | 25.28s | **最快** | 🚀 高性能 | RTX 4080/4090 |
+| **32** | 34.90s | 1.38x慢 | ❌ 内存瓶颈 | 不推荐 |
+
 **render_batch_size** - 批量渲染大小，影响速度和内存使用：
 
 | GPU类型 | 建议值 | 性能表现 | 适用场景 |
@@ -416,18 +429,6 @@ config = {
 | **RTX 3080/4080** | `16` | ⚡ 标准速度 | 主流GPU，默认配置 |
 | **RTX 3060/4060** | `8` | 💾 节省内存 | 中端GPU，8GB显存 |
 | **GTX 1080/2080** | `4` | 🔒 稳定运行 | 老GPU，避免OOM |
-
-```python
-# 示例：根据GPU调整
-if gpu_memory >= 24:  # A100/RTX 4090
-    render_batch_size = 32
-elif gpu_memory >= 12:  # RTX 3080/4080  
-    render_batch_size = 16
-elif gpu_memory >= 8:   # RTX 3060/4060
-    render_batch_size = 8
-else:                   # GTX 1080/2080
-    render_batch_size = 4
-```
 
 ### 数据结构
 ```python
@@ -490,6 +491,7 @@ print(f"算法统计: {searcher.visualization_data['algorithm_stats']}")
 - **内存管理优化**: 小批量策略 + GPU内存管理
 - **错误恢复机制**: 超时保护 + 多级降级处理
 - **统一测试框架**: 避免代码重复，支持灵活参数控制
+- **批量大小优化**: 新增`--max-batch-size`参数，灵活调节性能和内存 🆕
 
 ### 📈 项目价值
 - **研究应用**: 适合学术研究和算法改进

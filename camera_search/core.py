@@ -375,7 +375,8 @@ class MeshRenderer:
         
         return rendered_img
     
-    def render_batch_views(self, mesh: trimesh.Trimesh, poses: List[CameraPose]) -> List[torch.Tensor]:
+    def render_batch_views(self, mesh: trimesh.Trimesh, poses: List[CameraPose], 
+                          max_batch_size: int = 8) -> List[torch.Tensor]:
         """批量渲染多个视图"""
         # 准备mesh
         mesh_path = self.prepare_mesh(mesh)
@@ -395,7 +396,7 @@ class MeshRenderer:
         rendered_images = self.renderer.render_batch_views(
             camera_params=camera_params,
             render_mode='lambertian',
-            max_batch_size=8
+            max_batch_size=max_batch_size
         )
         
         # 检查结果
@@ -424,6 +425,7 @@ class CleanV2M4CameraSearch:
             'grad_iterations': 200,       # 梯度下降迭代数 (精细调整) - 优化: 100→200
             'image_size': 512,            # 图像尺寸
             'render_batch_size': 32,      # 批量渲染大小 - 提升: 16→32 (平衡性能和内存)
+            'max_batch_size': 8,          # 渲染器最大批量大小 (用于Top-N选择和PSO搜索)
             
             # 新增的优化参数
             'dust3r_alignment_iterations': 1000,  # DUSt3R对齐迭代数 - 优化: 300→1000
@@ -436,7 +438,10 @@ class CleanV2M4CameraSearch:
             # 模型选择配置
             'use_dust3r': True,                  # 是否使用DUSt3R模型
             'model_name': 'dust3r',              # 模型名称标识
-            'skip_model_step': False             # 是否跳过模型估计步骤
+            'skip_model_step': False,            # 是否跳过模型估计步骤
+            
+            # 性能优化配置
+            'use_batch_optimization': True       # 是否使用批量优化（PSO和梯度下降）
         }
         
         # 延迟初始化组件
@@ -684,17 +689,19 @@ class CleanV2M4CameraSearch:
         """步骤2: 基于相似度选择top-n - 优化批量渲染以避免nvdiffrast卡住"""
         
         print(f"   Evaluating {len(poses)} candidate poses...")
+        print(f"   Using max batch size: {self.config.get('max_batch_size', 8)}")
         
         scores = []
         batch_size = self.config['render_batch_size']  # 使用配置的批量渲染大小
+        max_batch_size = self.config.get('max_batch_size', 8)  # 获取最大批量大小
         
         # 尝试批量渲染
         for i in range(0, len(poses), batch_size):
             batch_poses = poses[i:i+batch_size]
             print(f"   Batch rendering {i+1}-{min(i+batch_size, len(poses))}/{len(poses)}...")
             
-            # 批量渲染这一组
-            rendered_images = self.renderer.render_batch_views(mesh, batch_poses)
+            # 批量渲染这一组，使用配置的max_batch_size
+            rendered_images = self.renderer.render_batch_views(mesh, batch_poses, max_batch_size)
             
             # 计算相似度分数
             for rendered_img in rendered_images:
@@ -753,7 +760,7 @@ class CleanV2M4CameraSearch:
     
     def _pso_search(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor,
                    model_pose: Optional[CameraPose], top_poses: List[CameraPose]) -> CameraPose:
-        """步骤5-6: PSO搜索"""
+        """步骤5-6: PSO搜索 - 支持批量和传统优化"""
         
         # 准备初始候选
         candidates = top_poses[:self.config['pso_particles']]
@@ -762,11 +769,6 @@ class CleanV2M4CameraSearch:
         
         if not candidates:
             return CameraPose(elevation=0, azimuth=0, radius=2.5)
-        
-        # 定义目标函数
-        def objective(pose: CameraPose) -> float:
-            rendered = self.renderer.render_single_view(mesh, pose)
-            return self._compute_similarity(reference_image, rendered)
         
         # 参数边界
         bounds = {
@@ -778,17 +780,57 @@ class CleanV2M4CameraSearch:
             'center_z': (-1.0, 1.0)
         }
         
-        return self.optimizer.pso_optimize(objective, candidates, bounds)
+        # 根据配置选择优化方式
+        if self.config.get('use_batch_optimization', True):
+            # 使用批量优化
+            def batch_objective(poses: List[CameraPose]) -> List[float]:
+                max_batch_size = self.config.get('max_batch_size', 8)
+                rendered_images = self.renderer.render_batch_views(mesh, poses, max_batch_size)
+                scores = []
+                for rendered_img in rendered_images:
+                    if rendered_img is not None:
+                        score = self._compute_similarity(reference_image, rendered_img)
+                        scores.append(score)
+                    else:
+                        scores.append(float('inf'))  # 渲染失败，给最差分数
+                return scores
+            
+            return self.optimizer.pso_optimize_batch(batch_objective, candidates, bounds)
+        else:
+            # 使用传统单次优化
+            def objective(pose: CameraPose) -> float:
+                rendered = self.renderer.render_single_view(mesh, pose)
+                return self._compute_similarity(reference_image, rendered)
+            
+            return self.optimizer.pso_optimize(objective, candidates, bounds)
     
     def _gradient_refinement(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor,
                            initial_pose: CameraPose) -> CameraPose:
-        """步骤7-8: 梯度下降精化"""
+        """步骤7-8: 梯度下降精化 - 支持批量和传统优化"""
         
-        def objective(pose: CameraPose) -> float:
-            rendered = self.renderer.render_single_view(mesh, pose)
-            return self._compute_similarity(reference_image, rendered)
-        
-        return self.optimizer.gradient_descent(objective, initial_pose)
+        # 根据配置选择优化方式
+        if self.config.get('use_batch_optimization', True):
+            # 使用批量优化
+            def batch_objective(poses: List[CameraPose]) -> List[float]:
+                max_batch_size = self.config.get('max_batch_size', 8)
+                rendered_images = self.renderer.render_batch_views(mesh, poses, max_batch_size)
+                scores = []
+                for rendered_img in rendered_images:
+                    if rendered_img is not None:
+                        score = self._compute_similarity(reference_image, rendered_img)
+                        scores.append(score)
+                    else:
+                        scores.append(float('inf'))  # 渲染失败，给最差分数
+                return scores
+            
+            return self.optimizer.gradient_descent_batch(batch_objective, initial_pose)
+        else:
+            # 使用传统单次优化
+            def objective(pose: CameraPose) -> float:
+                rendered = self.renderer.render_single_view(mesh, pose)
+                return self._compute_similarity(reference_image, rendered)
+            
+            return self.optimizer.gradient_descent(objective, initial_pose)
     
     def _compute_similarity(self, img1: torch.Tensor, img2) -> float:
         """计算图像相似度 - 使用纯PyTorch版本避免numpy转换"""

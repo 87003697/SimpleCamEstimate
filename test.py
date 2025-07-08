@@ -149,10 +149,12 @@ def test_visualization_components():
     
     return True
 
-def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visualization: bool = True) -> bool:
+def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visualization: bool = True, 
+                          max_batch_size: int = 8) -> bool:
     """运行单场景测试"""
     model_name = use_model.upper() if use_model != 'none' else 'None (Skip Model Step)'
     print(f"🎬 Testing scene: {scene_name} (using {model_name})")
+    print(f"   🔧 Max batch size: {max_batch_size}")
     
     from camera_search import DataPair, CleanV2M4CameraSearch
     
@@ -177,7 +179,9 @@ def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visua
     else:  # none
         searcher.config['skip_model_step'] = True
         searcher.config['model_name'] = 'none'
-        print(f"   🔄 Skipping model estimation step")
+    
+    # 设置批量渲染大小
+    searcher.config['max_batch_size'] = max_batch_size
     
     # 运行算法
     import time
@@ -203,13 +207,15 @@ def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visua
         return False
 
 def run_batch_test(num_scenes: int = 5, use_model: str = 'none', 
-                  enable_visualization: bool = True, create_batch_summary: bool = True) -> Dict:
+                  enable_visualization: bool = True, create_batch_summary: bool = True,
+                  max_batch_size: int = 8) -> Dict:
     """运行批量测试"""
     model_name = use_model.upper() if use_model != 'none' else 'None (Skip Model Step)'
     
     print(f"\n🔄 Batch testing {num_scenes} scenes (using {model_name})...")
     print(f"   🎨 Visualization: {'enabled' if enable_visualization else 'disabled'}")
     print(f"   📋 Batch summary: {'enabled' if create_batch_summary else 'disabled'}")
+    print(f"   🔧 Max batch size: {max_batch_size}")
     
     from camera_search import DataManager, CleanV2M4CameraSearch
     
@@ -241,6 +247,9 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
     else:  # none
         searcher.config['skip_model_step'] = True
         searcher.config['model_name'] = 'none'
+    
+    # 设置批量渲染大小
+    searcher.config['max_batch_size'] = max_batch_size
     
     # 批量处理
     results = {}
@@ -307,6 +316,8 @@ def main():
     parser.add_argument('--cuda-device', type=int, default=0, help='CUDA device ID')
     parser.add_argument('--no-visualization', action='store_true', help='Disable visualization')
     parser.add_argument('--no-batch-summary', action='store_true', help='Disable batch summary')
+    parser.add_argument('--max-batch-size', type=int, default=8, 
+                       help='Maximum batch size for rendering (default: 8, larger values use more GPU memory)')
     
     args = parser.parse_args()
     
@@ -337,7 +348,8 @@ def main():
         success = run_single_scene_test(
             scene_name=args.single_scene,
             use_model=args.use_model,
-            enable_visualization=not args.no_visualization
+            enable_visualization=not args.no_visualization,
+            max_batch_size=args.max_batch_size
         )
         
         if success:
@@ -350,7 +362,8 @@ def main():
             num_scenes=args.scenes,
             use_model=args.use_model,
             enable_visualization=not args.no_visualization,
-            create_batch_summary=not args.no_batch_summary
+            create_batch_summary=not args.no_batch_summary,
+            max_batch_size=args.max_batch_size
         )
         
         if batch_result['success']:
@@ -377,6 +390,8 @@ def main():
         print(f"   python test.py --no-visualization            # Disable visualization")
         print(f"   python test.py --scenes 25                   # Test all scenes (no model)")
         print(f"   python test.py --scenes 5 --use-model dust3r # Use DUSt3R batch test")
+        print(f"   python test.py --max-batch-size 16           # Use larger batch size (more GPU memory)")
+        print(f"   python test.py --max-batch-size 4            # Use smaller batch size (less GPU memory)")
         
     else:
         print(f"⚠️ Some tests failed: {passed_tests}/{total_tests}")
