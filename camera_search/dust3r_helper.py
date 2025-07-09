@@ -110,9 +110,9 @@ class DUSt3RHelper:
         pairs = make_pairs(processed_images, scene_graph='complete', symmetrize=True)
         output = inference(pairs, self.model, self.device, batch_size=1)
         
-        # 4. 全局对齐 - 使用默认的PointCloudOptimizer模式
+        # 4. 全局对齐 - 使用更快的设置
         scene = global_aligner(output, device=self.device)
-        loss = scene.compute_global_alignment(niter=1000, lr=0.01)
+        loss = scene.compute_global_alignment(niter=300, lr=0.01)
         
         # 5. 提取结果
         point_clouds = scene.get_pts3d()

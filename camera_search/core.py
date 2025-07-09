@@ -391,19 +391,19 @@ class CleanV2M4CameraSearch:
         self.device = device
         self.enable_visualization = enable_visualization
         
-        # 优化后的配置参数 - 基于性能测试最优值
+        # 优化后的配置参数 - 恢复到更快的设置
         self.config = {
-            'initial_samples': 512,       # 初始采样数 (海选阶段) - 提升: 128→512
+            'initial_samples': 128,       # 初始采样数 (海选阶段) - 恢复: 512→128 (提升速度)
             'top_n': 7,                   # 候选数 (几何解密)
-            'pso_particles': 80,          # PSO粒子数 (全局优化) - 优化: 50→80
+            'pso_particles': 50,          # PSO粒子数 (全局优化) - 恢复: 80→50 (提升速度)
             'pso_iterations': 20,         # PSO迭代数 (全局优化)
-            'grad_iterations': 200,       # 梯度下降迭代数 (精细调整) - 优化: 100→200
+            'grad_iterations': 100,       # 梯度下降迭代数 (精细调整) - 恢复: 200→100 (提升速度)
             'image_size': 512,            # 图像尺寸
-            'render_batch_size': 32,      # 批量渲染大小 - 提升: 16→32 (平衡性能和内存)
+            'render_batch_size': 16,      # 批量渲染大小 - 恢复: 32→16 (平衡性能和内存)
             'max_batch_size': 8,          # 渲染器最大批量大小 (用于Top-N选择和PSO搜索)
             
             # 新增的优化参数
-            'dust3r_alignment_iterations': 1000,  # DUSt3R对齐迭代数 - 优化: 300→1000
+            'dust3r_alignment_iterations': 300,  # DUSt3R对齐迭代数 - 恢复: 1000→300 (提升速度)
             'pso_w': 0.6,                        # PSO惯性权重 - 优化: 0.7→0.6
             'pso_c1': 1.0,                       # PSO个体学习因子 - 优化: 1.5→1.0
             'top_k_for_pso': 100,                # PSO选择的top-k候选
