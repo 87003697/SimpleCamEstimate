@@ -13,6 +13,8 @@
 - ✅ 新增完整可视化支持
 - ✅ nvdiffrast渲染稳定性问题解决
 - ✅ 统一测试脚本，避免代码重复 🆕
+- ✅ 完全移除trimesh，全面使用kiui.mesh 🆕
+- ✅ 新增render-mode参数，支持多种渲染模式 🆕
 
 ---
 
@@ -31,6 +33,8 @@
 - **SSIM计算**: 解决scipy滤波函数死循环问题
 - **批量大小控制**: 新增`max_batch_size`参数，灵活调节GPU内存和性能 🆕
 - **梯度优化**: 在推理阶段使用`torch.no_grad()`，提升性能和内存效率 🆕
+- **mesh处理优化**: 完全移除trimesh，直接使用kiui.mesh，消除文件I/O开销 🆕
+- **渲染模式控制**: 新增render-mode参数，textured模式显著提升精度 🆕
 
 ### ✅ 可视化系统
 - **结果对比图**: 参考图像 vs 渲染结果对比
@@ -147,6 +151,11 @@ python test.py --device cpu        # 使用CPU计算
 python test.py --max-batch-size 16 # 使用更大批量 (更快，需要更多GPU内存)
 python test.py --max-batch-size 4  # 使用更小批量 (更慢，节省GPU内存)
 python test.py --max-batch-size 32 # 高端GPU最大性能
+
+# 渲染模式控制 🆕
+python test.py --render-mode textured    # 纹理渲染 (推荐)
+python test.py --render-mode normal      # 法线渲染
+python test.py --render-mode depth       # 深度渲染
 
 # 可视化功能测试
 python test.py --test-components    # 测试可视化组件
@@ -315,6 +324,14 @@ def search_camera_pose(self, data_pair: DataPair) -> CameraPose:
 | **批量渲染优化** | 无 | 可配置批量大小 | **性能提升** 🆕 |
 | **核心功能** | 完整保留 | 完整保留 | **无损失** |
 
+### 🚀 渲染模式性能对比 (dancing_spiderman场景)
+
+| 渲染模式 | 效果 | 推荐场景 |
+|---------|------|----------|
+| **textured** | 🏆 最佳 | 有纹理的3D模型 |
+| **lambertian** | 📚 基础 | 默认模式 |
+| **normal** | 🔍 几何 | 形状分析 |
+
 ---
 
 ## 🧪 测试结果
@@ -374,11 +391,15 @@ Pillow>=8.0.0
 scikit-image>=0.18.0
 torch>=1.9.0
 torchvision>=0.10.0
-trimesh>=3.10.0
 matplotlib>=3.5.0
 tqdm>=4.60.0
 kiui>=0.2.0        # 高质量渲染 (必需)
 nvdiffrast          # GPU加速渲染 (必需)
+
+### 已移除依赖 🆕
+```txt
+trimesh>=3.10.0     # 🚫 已完全移除，使用kiui.mesh替代
+```
 ```
 
 ### 安装方式
