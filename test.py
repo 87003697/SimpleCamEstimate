@@ -262,6 +262,8 @@ def main():
                        help='Use normal predictor to convert input image to normal map before matching')
     parser.add_argument('--profile', action='store_true', 
                        help='Enable GPU performance profiling')
+    parser.add_argument('--check-env', action='store_true', 
+                       help='Enable full environment check (default: False, skip for faster startup)')
     
     args = parser.parse_args()
     
@@ -277,9 +279,13 @@ def main():
     print("=" * 50)
     
     # 环境检查
-    if not check_environment():
-        print("❌ Environment check failed, exiting test")
-        sys.exit(1)
+    if args.check_env:
+        if not check_environment():
+            print("❌ Environment check failed, exiting test")
+            sys.exit(1)
+    else:
+        print("⚡ Fast startup mode (skipping environment check)")
+        print("   Use --check-env to enable full environment validation")
     
     # 运行测试
     passed_tests = 0
@@ -331,11 +337,12 @@ def main():
     
     # 显示用法示例
     print("\n💡 Usage examples:")
-    print("   python test.py --scenes 5                    # Test 5 scenes (no model)")
-    print("   python test.py --single-scene 'dancing_spiderman'  # Test single scene (no model)")
+    print("   python test.py --scenes 5                    # Test 5 scenes (fast startup)")
+    print("   python test.py --single-scene 'dancing_spiderman'  # Test single scene (fast startup)")
     print("   python test.py --single-scene 'dancing_spiderman' --use-model dust3r  # Use DUSt3R")
+    print("   python test.py --check-env                   # Enable full environment check")
     print("   python test.py --no-visualization            # Disable visualization")
-    print("   python test.py --scenes 25                   # Test all scenes (no model)")
+    print("   python test.py --scenes 25                   # Test all scenes (fast startup)")
     print("   python test.py --scenes 5 --use-model dust3r # Use DUSt3R batch test")
     print("   python test.py --max-batch-size 16           # Use larger batch size (more GPU memory)")
     print("   python test.py --max-batch-size 4            # Use smaller batch size (less GPU memory)")
@@ -346,6 +353,7 @@ def main():
     print("   python test.py --use-normal --render-mode normal  # Use normal predictor + normal rendering")
     print("   python test.py --single-scene 'dancing_spiderman' --profile  # Enable GPU profiling")
     print("   python test.py --scenes 5 --profile          # Enable GPU profiling for batch test")
+    print("   python test.py --scenes 5 --check-env        # Enable environment check for batch test")
 
 if __name__ == "__main__":
     main()
