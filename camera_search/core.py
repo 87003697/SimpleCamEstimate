@@ -20,6 +20,9 @@ import random
 if TYPE_CHECKING:
     from kiui.mesh import Mesh as KiuiMesh
 
+# 导入GPU性能监控
+from .gpu_profiler import profile_stage
+
 @dataclass
 class CameraPose:
     """简化的相机姿态参数 - 与KiuiKit兼容"""
@@ -327,11 +330,12 @@ class MeshRenderer:
             self._renderer = StandardKiuiRenderer(
                 width=512, 
                 height=512, 
-                background_color=(1.0, 1.0, 1.0),
+                background_color=(255, 255, 255),
                 device=self.device
             )
         return self._renderer
     
+    @profile_stage("Single_View_Render")
     def render_single_view(self, mesh: 'KiuiMesh', pose: CameraPose) -> torch.Tensor:
         """渲染单个视图 - 直接使用kiui.Mesh对象"""
         rendered_img = self.renderer.render_single_view(
@@ -348,6 +352,7 @@ class MeshRenderer:
         
         return rendered_img
     
+    @profile_stage("Batch_View_Render")
     def render_batch_views(self, mesh: 'KiuiMesh', poses: List[CameraPose], 
                           max_batch_size: int = 8) -> List[torch.Tensor]:
         """批量渲染多个视图 - 直接使用kiui.Mesh对象"""
@@ -369,11 +374,11 @@ class MeshRenderer:
             max_batch_size=max_batch_size
         )
         
-        # 检查结果
+        # 检查结果并添加有效图像
         valid_images = []
         for i, img in enumerate(rendered_images):
             if img is None:
-                raise RuntimeError(f"Batch rendering failed: pose {i}")
+                raise RuntimeError(f"Batch rendering failed at index {i}")
             valid_images.append(img)
         
         return valid_images
@@ -493,6 +498,7 @@ class CleanV2M4CameraSearch:
             self._visualizer = V2M4Visualizer(output_dir="outputs/visualization")
         return self._visualizer
     
+    @profile_stage("V2M4_Algorithm")
     def search_camera_pose(self, data_pair: DataPair, save_visualization: bool = True, use_normal: bool = False) -> CameraPose:
         """主算法入口 - V2M4的9个核心步骤"""
         
@@ -683,6 +689,7 @@ class CleanV2M4CameraSearch:
         """步骤1: 球面等面积采样"""
         return GeometryUtils.sample_sphere_poses(self.config['initial_samples'])
     
+    @profile_stage("Top_N_Selection")
     def _select_top_poses(self, mesh: 'KiuiMesh', reference_image: torch.Tensor, 
                          poses: List[CameraPose]) -> List[CameraPose]:
         """步骤2: 基于相似度选择top-n - 优化批量渲染以避免nvdiffrast卡住"""
@@ -729,6 +736,7 @@ class CleanV2M4CameraSearch:
         
         return selected_poses
     
+    @profile_stage("DUSt3R_Estimation")
     def _model_estimation(self, mesh: 'KiuiMesh', reference_image: torch.Tensor, 
                          top_poses: List[CameraPose]) -> Optional[CameraPose]:
         """步骤3-4: 模型估计 - 核心几何约束 (DUSt3R或VGGT)"""
@@ -759,6 +767,7 @@ class CleanV2M4CameraSearch:
         
         return best_pose
     
+    @profile_stage("PSO_Search")
     def _pso_search(self, mesh: 'KiuiMesh', reference_image: torch.Tensor,
                    model_pose: Optional[CameraPose], top_poses: List[CameraPose]) -> CameraPose:
         """步骤5-6: PSO搜索 - 支持批量和传统优化"""
@@ -807,6 +816,7 @@ class CleanV2M4CameraSearch:
             
             return self.optimizer.pso_optimize(objective, candidates, bounds)
     
+    @profile_stage("Gradient_Refinement")
     def _gradient_refinement(self, mesh: 'KiuiMesh', reference_image: torch.Tensor,
                            initial_pose: CameraPose) -> CameraPose:
         """步骤7-8: 梯度下降精化 - 支持批量和传统优化"""

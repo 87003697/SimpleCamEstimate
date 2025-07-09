@@ -23,6 +23,9 @@ from config import (
     DUST3R_MODEL_PATH
 )
 
+# 导入GPU性能监控
+from camera_search.gpu_profiler import enable_profiling, disable_profiling, print_profiling_summary
+
 # 设置CUDA设备
 def setup_cuda_device(device_id: int = 0):
     """设置CUDA设备"""
@@ -75,64 +78,6 @@ def check_environment():
         return False
     
     return True
-
-def test_visualization_components():
-    """测试可视化组件"""
-    print("🎨 Testing visualization components...")
-    
-    try:
-        from camera_search import V2M4Visualizer
-        visualizer = V2M4Visualizer(output_dir="outputs/test_visualization")
-        print("   ✅ Visualizer created successfully")
-        
-        # 创建一个简单的测试图像
-        import numpy as np
-        from camera_search import CameraPose, DataPair
-        
-        test_image = np.ones((512, 512, 3), dtype=np.uint8) * 128
-        test_pose = CameraPose(elevation=30, azimuth=45, radius=2.5)
-        test_data_pair = DataPair.from_scene_name("test_scene")
-        
-        # 测试结果对比图
-        comparison_path = visualizer.create_result_comparison(
-            data_pair=test_data_pair,
-            reference_image=test_image,
-            rendered_result=test_image,
-            final_pose=test_pose,
-            mesh_info={'vertices_count': 1000, 'faces_count': 2000},
-            algorithm_stats={'initial_samples': 512, 'final_score': 0.5},
-            execution_time=30.0
-        )
-        
-        print(f"📊 可视化结果已保存: {Path(comparison_path).name}")
-        print(f"   ✅ Result comparison chart: {Path(comparison_path).name}")
-        
-        # 测试进度可视化
-        progression_data = [
-            {
-                'step_name': 'Test Step',
-                'pose': test_pose,
-                'rendered_image': test_image,
-                'similarity': 0.5,
-                'score': 0.5
-            }
-        ]
-        
-        progression_path = visualizer.create_pose_progression_visualization(
-            data_pair=test_data_pair,
-            reference_image=test_image,
-            progression_data=progression_data,
-            final_pose=test_pose
-        )
-        
-        print(f"📈 优化过程可视化已保存: {Path(progression_path).name}")
-        print(f"   ✅ Optimization process chart: {Path(progression_path).name}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"   ❌ Visualization test failed: {e}")
-        return False
 
 def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visualization: bool = True, 
                           max_batch_size: int = 8, render_mode: str = 'lambertian', use_normal: bool = False) -> bool:
@@ -315,8 +260,15 @@ def main():
                        help='Render mode for rendering the 3D model (default: lambertian)')
     parser.add_argument('--use-normal', action='store_true', 
                        help='Use normal predictor to convert input image to normal map before matching')
+    parser.add_argument('--profile', action='store_true', 
+                       help='Enable GPU performance profiling')
     
     args = parser.parse_args()
+    
+    # 启用GPU性能监控
+    if args.profile:
+        print("🔍 GPU Performance profiling enabled")
+        enable_profiling()
     
     # 设置CUDA设备
     setup_cuda_device(args.cuda_device)
@@ -328,11 +280,6 @@ def main():
     if not check_environment():
         print("❌ Environment check failed, exiting test")
         sys.exit(1)
-    
-    # 测试可视化组件
-    if not args.no_visualization:
-        if not test_visualization_components():
-            print("⚠️ Visualization component test failed, but continuing...")
     
     # 运行测试
     passed_tests = 0
@@ -365,6 +312,11 @@ def main():
         if batch_results['success']:
             passed_tests = 1
     
+    # 显示性能监控摘要
+    if args.profile:
+        print_profiling_summary()
+        disable_profiling()
+    
     print("\n" + "=" * 50)
     print(f"🎉 All tests passed! ({passed_tests}/{total_tests})")
     print("📊 V2M4 algorithm is working normally!")
@@ -392,6 +344,8 @@ def main():
     print("   python test.py --render-mode depth           # Use depth rendering mode")
     print("   python test.py --use-normal                  # Use normal predictor mode")
     print("   python test.py --use-normal --render-mode normal  # Use normal predictor + normal rendering")
+    print("   python test.py --single-scene 'dancing_spiderman' --profile  # Enable GPU profiling")
+    print("   python test.py --scenes 5 --profile          # Enable GPU profiling for batch test")
 
 if __name__ == "__main__":
     main()

@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Optional
 from huggingface_hub import snapshot_download
 
+# 导入GPU性能监控
+from .gpu_profiler import profile_stage
+
 class SimpleNormalPredictor:
     """简化的法线图预测器"""
     
@@ -104,6 +107,7 @@ class SimpleNormalPredictor:
         
         print(f"   ✅ StableNormal model loaded successfully on {self.device}")
     
+    @profile_stage("Normal_Prediction")
     def predict(self, image: Image.Image, 
                 resolution: int = 768, match_input_resolution: bool = True, 
                 data_type: str = 'object') -> Image.Image:

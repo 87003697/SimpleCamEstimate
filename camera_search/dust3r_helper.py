@@ -12,6 +12,9 @@ import numpy as np
 import cv2
 from pathlib import Path
 
+# 导入GPU性能监控
+from .gpu_profiler import profile_stage
+
 # 设置DUSt3R路径
 def setup_dust3r_paths():
     """设置本地DUSt3R核心路径"""
@@ -89,6 +92,7 @@ class DUSt3RHelper:
         model.eval()
         return model
     
+    @profile_stage("DUSt3R_Inference")
     def inference(self, reference_image: np.ndarray, 
                  rendered_views: List[np.ndarray]) -> DUSt3RResult:
         """DUSt3R推理 - 核心功能"""
