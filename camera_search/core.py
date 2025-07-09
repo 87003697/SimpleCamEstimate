@@ -287,9 +287,18 @@ class GeometryUtils:
 class MeshRenderer:
     """Mesh渲染器 - 直接使用kiui.Mesh对象"""
     
-    def __init__(self, device: str = "cuda"):
+    def __init__(self, device: str = "cuda", render_mode: str = "lambertian"):
         self.device = device
+        self.render_mode = render_mode
         self._renderer = None
+        
+        # 验证渲染模式
+        valid_modes = ['lambertian', 'normal', 'textured', 'depth']
+        if self.render_mode not in valid_modes:
+            print(f"⚠️ Warning: Invalid render mode '{self.render_mode}', using 'lambertian'")
+            self.render_mode = 'lambertian'
+        
+        print(f"🎨 MeshRenderer initialized with render_mode: '{self.render_mode}'")
         
         # 检查依赖
         self._check_dependencies()
@@ -331,7 +340,7 @@ class MeshRenderer:
             azimuth=pose.azimuth,
             distance=pose.radius,
             target_point=pose.target_point,
-            render_mode='lambertian'
+            render_mode=self.render_mode
         )
         
         if rendered_img is None:
@@ -356,7 +365,7 @@ class MeshRenderer:
         rendered_images = self.renderer.render_batch_views(
             loaded_mesh_obj=mesh,
             camera_params=camera_params,
-            render_mode='lambertian',
+            render_mode=self.render_mode,
             max_batch_size=max_batch_size
         )
         
@@ -402,7 +411,10 @@ class CleanV2M4CameraSearch:
             'skip_model_step': False,            # 是否跳过模型估计步骤
             
             # 性能优化配置
-            'use_batch_optimization': True       # 是否使用批量优化（PSO和梯度下降）
+            'use_batch_optimization': True,      # 是否使用批量优化（PSO和梯度下降）
+            
+            # 渲染配置
+            'render_mode': 'lambertian'          # 渲染模式: 'lambertian', 'normal', 'textured', 'depth'
         }
         
         # 延迟初始化组件
@@ -436,7 +448,7 @@ class CleanV2M4CameraSearch:
     def renderer(self):
         """延迟初始化渲染器"""
         if self._renderer is None:
-            self._renderer = MeshRenderer(self.device)
+            self._renderer = MeshRenderer(self.device, self.config['render_mode'])
         return self._renderer
     
     @property

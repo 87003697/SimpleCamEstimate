@@ -157,11 +157,12 @@ def test_visualization_components():
     return True
 
 def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visualization: bool = True, 
-                          max_batch_size: int = 8) -> bool:
+                          max_batch_size: int = 8, render_mode: str = 'lambertian') -> bool:
     """运行单场景测试"""
     model_name = use_model.upper() if use_model != 'none' else 'None (Skip Model Step)'
     print(f"🎬 Testing scene: {scene_name} (using {model_name})")
     print(f"   🔧 Max batch size: {max_batch_size}")
+    print(f"   🎨 Render mode: {render_mode}")
     
     from camera_search import DataPair, CleanV2M4CameraSearch
     
@@ -187,8 +188,9 @@ def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visua
         searcher.config['skip_model_step'] = True
         searcher.config['model_name'] = 'none'
     
-    # 设置批量渲染大小
+    # 设置渲染配置
     searcher.config['max_batch_size'] = max_batch_size
+    searcher.config['render_mode'] = render_mode
     
     # 运行算法
     import time
@@ -215,7 +217,7 @@ def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visua
 
 def run_batch_test(num_scenes: int = 5, use_model: str = 'none', 
                   enable_visualization: bool = True, create_batch_summary: bool = True,
-                  max_batch_size: int = 8) -> Dict:
+                  max_batch_size: int = 8, render_mode: str = 'lambertian') -> Dict:
     """运行批量测试"""
     model_name = use_model.upper() if use_model != 'none' else 'None (Skip Model Step)'
     
@@ -223,6 +225,7 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
     print(f"   🎨 Visualization: {'enabled' if enable_visualization else 'disabled'}")
     print(f"   📋 Batch summary: {'enabled' if create_batch_summary else 'disabled'}")
     print(f"   🔧 Max batch size: {max_batch_size}")
+    print(f"   🎨 Render mode: {render_mode}")
     
     from camera_search import DataManager, CleanV2M4CameraSearch
     
@@ -255,8 +258,9 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
         searcher.config['skip_model_step'] = True
         searcher.config['model_name'] = 'none'
     
-    # 设置批量渲染大小
+    # 设置渲染配置
     searcher.config['max_batch_size'] = max_batch_size
+    searcher.config['render_mode'] = render_mode
     
     # 批量处理
     results = {}
@@ -325,6 +329,8 @@ def main():
     parser.add_argument('--no-batch-summary', action='store_true', help='Disable batch summary')
     parser.add_argument('--max-batch-size', type=int, default=8, 
                        help='Maximum batch size for rendering (default: 8, larger values use more GPU memory)')
+    parser.add_argument('--render-mode', type=str, choices=['lambertian', 'normal', 'textured', 'depth'], default='lambertian',
+                       help='Render mode for rendering the 3D model (default: lambertian)')
     
     args = parser.parse_args()
     
@@ -356,7 +362,8 @@ def main():
             scene_name=args.single_scene,
             use_model=args.use_model,
             enable_visualization=not args.no_visualization,
-            max_batch_size=args.max_batch_size
+            max_batch_size=args.max_batch_size,
+            render_mode=args.render_mode
         )
         
         if success:
@@ -370,7 +377,8 @@ def main():
             use_model=args.use_model,
             enable_visualization=not args.no_visualization,
             create_batch_summary=not args.no_batch_summary,
-            max_batch_size=args.max_batch_size
+            max_batch_size=args.max_batch_size,
+            render_mode=args.render_mode
         )
         
         if batch_result['success']:
@@ -399,6 +407,9 @@ def main():
         print(f"   python test.py --scenes 5 --use-model dust3r # Use DUSt3R batch test")
         print(f"   python test.py --max-batch-size 16           # Use larger batch size (more GPU memory)")
         print(f"   python test.py --max-batch-size 4            # Use smaller batch size (less GPU memory)")
+        print(f"   python test.py --render-mode normal          # Use normal rendering mode")
+        print(f"   python test.py --render-mode textured        # Use textured rendering mode")
+        print(f"   python test.py --render-mode depth           # Use depth rendering mode")
         
     else:
         print(f"⚠️ Some tests failed: {passed_tests}/{total_tests}")
