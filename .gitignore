@@ -67,6 +67,13 @@ models/dust3r/*.safetensors
 models/dust3r/*.bin
 models/dust3r/*.pth
 
+# Model weights and checkpoints
+weights/
+checkpoints/
+*.pth
+*.pt
+*.safetensors
+
 # Temporary files
 *.obj
 *.glb.tmp
