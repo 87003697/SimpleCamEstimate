@@ -15,12 +15,31 @@ from pathlib import Path
 # 设置DUSt3R路径
 def setup_dust3r_paths():
     """设置本地DUSt3R核心路径"""
-    script_dir = Path(__file__).resolve().parent
-    project_root = script_dir.parent
-    
-    dust3r_core_path = project_root / "_reference" / "MeshSeriesGen" / "models" / "dust3r" / "dust3r_core"
-    dust3r_lib_path = dust3r_core_path / "dust3r"
-    croco_path = dust3r_core_path / "croco"
+    # 尝试从配置文件获取路径
+    try:
+        # 将项目根目录添加到sys.path
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parent
+        sys.path.insert(0, str(project_root))
+        
+        from config import get_dust3r_paths
+        dust3r_config = get_dust3r_paths()
+        
+        dust3r_core_path = dust3r_config['core_path']
+        dust3r_lib_path = dust3r_config['lib_path']
+        croco_path = dust3r_config['croco_path']
+        
+        print(f"🔧 Using DUSt3R paths from config.py")
+        
+    except ImportError:
+        print("⚠️ config.py not found, using default paths")
+        # 使用默认路径（原始实现）
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parent
+        
+        dust3r_core_path = project_root / "_reference" / "MeshSeriesGen" / "models" / "dust3r" / "dust3r_core"
+        dust3r_lib_path = dust3r_core_path / "dust3r"
+        croco_path = dust3r_core_path / "croco"
     
     if not dust3r_core_path.exists():
         raise FileNotFoundError(f"DUSt3R core path不存在: {dust3r_core_path}")
@@ -134,10 +153,31 @@ class DUSt3RHelper:
     
     def _save_temp_images(self, images: List[np.ndarray]) -> List[str]:
         """保存临时图像文件"""
-        temp_paths = []
-        for i, img in enumerate(images):
-            fd, temp_path = tempfile.mkstemp(suffix=f'_{i:03d}.jpg', prefix='dust3r_')
-            os.close(fd)
-            cv2.imwrite(temp_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            temp_paths.append(temp_path)
-        return temp_paths 
+        # 尝试使用配置文件中的临时目录
+        try:
+            # 将项目根目录添加到sys.path
+            script_dir = Path(__file__).resolve().parent
+            project_root = script_dir.parent
+            sys.path.insert(0, str(project_root))
+            
+            from config import get_output_paths
+            output_paths = get_output_paths()
+            temp_dir = output_paths['temp_dir']
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            temp_paths = []
+            for i, img in enumerate(images):
+                temp_path = temp_dir / f'dust3r_temp_{i:03d}.jpg'
+                cv2.imwrite(str(temp_path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                temp_paths.append(str(temp_path))
+            return temp_paths
+            
+        except ImportError:
+            # 使用默认的临时文件机制
+            temp_paths = []
+            for i, img in enumerate(images):
+                fd, temp_path = tempfile.mkstemp(suffix=f'_{i:03d}.jpg', prefix='dust3r_')
+                os.close(fd)
+                cv2.imwrite(temp_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                temp_paths.append(temp_path)
+            return temp_paths 

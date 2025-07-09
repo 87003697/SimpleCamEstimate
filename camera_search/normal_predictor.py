@@ -4,16 +4,61 @@
 """
 
 import torch
-import numpy as np
 from PIL import Image
-import cv2
+import os
+import sys
+from pathlib import Path
+from typing import Optional
+from huggingface_hub import snapshot_download
 
 class SimpleNormalPredictor:
     """简化的法线图预测器"""
     
-    def __init__(self, device="cuda"):
-        self.device = device
+    def __init__(self, device="cuda", weights_dir=None, yoso_version=None):
+        # 尝试从配置文件获取配置
+        try:
+            # 将项目根目录添加到sys.path
+            script_dir = Path(__file__).resolve().parent
+            project_root = script_dir.parent
+            sys.path.insert(0, str(project_root))
+            
+            from config import get_stablenormal_config
+            config = get_stablenormal_config()
+            
+            self.device = device if device != "cuda" else config['device']
+            self.weights_dir = weights_dir if weights_dir is not None else config['weights_dir']
+            self.yoso_version = yoso_version if yoso_version is not None else config['yoso_version']
+            
+            print(f"🔧 Using StableNormal config from config.py")
+            
+        except ImportError:
+            print("⚠️ config.py not found, using default settings")
+            # 使用默认配置
+            self.device = device
+            self.weights_dir = weights_dir if weights_dir is not None else "./weights"
+            self.yoso_version = yoso_version if yoso_version is not None else "yoso-normal-v1-8-1"
+        
         self.model = None
+        
+        # 确保权重目录存在
+        os.makedirs(self.weights_dir, exist_ok=True)
+    
+    def _cache_weights(self) -> None:
+        """缓存模型权重"""
+        model_id = f"Stable-X/{self.yoso_version}"
+        local_path = os.path.join(self.weights_dir, self.yoso_version)
+        
+        if os.path.exists(local_path):
+            print(f"   📁 Model weights already cached at: {local_path}")
+            return
+        
+        print(f"   📥 Downloading model weights: {model_id}")
+        snapshot_download(
+            repo_id=model_id, 
+            local_dir=local_path, 
+            force_download=False
+        )
+        print(f"   ✅ Weights cached at: {local_path}")
     
     def load_model(self):
         """加载StableNormal模型"""
@@ -22,75 +67,72 @@ class SimpleNormalPredictor:
         
         print("🎨 Loading Normal Predictor...")
         
-        # 尝试加载高级模型
-        try:
+        # 缓存权重
+        self._cache_weights()
+        
+        # 尝试本地加载
+        local_repo_path = os.path.join(
+            torch.hub.get_dir(), 
+            'hugoycj_StableNormal_main'
+        )
+        
+        if os.path.exists(local_repo_path):
+            print("   🔄 Loading from local cache...")
+            self.model = torch.hub.load(
+                local_repo_path,
+                "StableNormal_turbo",
+                yoso_version=self.yoso_version,
+                source='local',
+                local_cache_dir=self.weights_dir,
+                device=self.device,  # 修复：传递正确的设备参数
+            )
+        else:
+            print("   🔄 Loading from remote...")
             self.model = torch.hub.load(
                 "hugoycj/StableNormal", 
                 "StableNormal_turbo",
                 trust_remote_code=True, 
-                yoso_version="yoso-normal-v1-8-1"
+                yoso_version=self.yoso_version,
+                local_cache_dir=self.weights_dir,
+                device=self.device  # 修复：传递正确的设备参数
             )
-            
-            if hasattr(self.model, 'to'):
-                self.model = self.model.to(self.device)
-            if hasattr(self.model, 'eval'):
-                self.model.eval()
-            
-            print(f"✅ StableNormal model loaded successfully on {self.device}")
-            self.use_advanced_model = True
-            
-        except Exception as e:
-            print(f"   ⚠️ Failed to load StableNormal model: {e}")
-            print("   ⚠️ Using basic processing instead")
-            self.use_advanced_model = False
-            self.model = "basic_processing"
+        
+        # 配置模型 - 确保所有组件都在正确设备上
+        self.model = self.model.to(self.device)
+        if hasattr(self.model, 'eval'):
+            self.model.eval()
+        
+        print(f"   ✅ StableNormal model loaded successfully on {self.device}")
     
-    def predict(self, image_pil):
+    def predict(self, image: Image.Image, 
+                resolution: int = 768, match_input_resolution: bool = True, 
+                data_type: str = 'object') -> Image.Image:
         """预测图像的法线图"""
         self.load_model()
         
-        if self.use_advanced_model:
-            # 使用高级模型
-            with torch.no_grad():
-                normal_map = self.model(image_pil)
-                return normal_map
-        else:
-            # 使用基本处理
-            return self._basic_normal_prediction(image_pil)
+        # 直接使用PIL Image，无需转换
+        with torch.no_grad():
+            normal_map = self.model(
+                image,
+                resolution=resolution,
+                match_input_resolution=match_input_resolution,
+                data_type=data_type
+            )
+            return normal_map
+
+
+# 便捷函数
+def create_normal_predictor(device="cuda", weights_dir=None, 
+                           yoso_version=None, 
+                           load_immediately=False) -> SimpleNormalPredictor:
+    """工厂函数：创建normal predictor"""
+    predictor = SimpleNormalPredictor(
+        device=device, 
+        weights_dir=weights_dir, 
+        yoso_version=yoso_version
+    )
     
-    def _basic_normal_prediction(self, image_pil):
-        """基本法线图预测 - 基于图像处理"""
-        # 转换为numpy数组
-        image_np = np.array(image_pil)
-        
-        # 转换为灰度图
-        if len(image_np.shape) == 3:
-            gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = image_np
-        
-        # 计算梯度
-        grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        
-        # 构建法线图
-        normal_x = grad_x / 255.0
-        normal_y = grad_y / 255.0
-        normal_z = np.ones_like(normal_x) * 0.5
-        
-        # 归一化
-        length = np.sqrt(normal_x**2 + normal_y**2 + normal_z**2)
-        normal_x = normal_x / (length + 1e-8)
-        normal_y = normal_y / (length + 1e-8)
-        normal_z = normal_z / (length + 1e-8)
-        
-        # 转换到 [0, 1] 范围
-        normal_map = np.stack([
-            (normal_x + 1) / 2,
-            (normal_y + 1) / 2,
-            (normal_z + 1) / 2
-        ], axis=2)
-        
-        # 转换为PIL图像
-        normal_map = (normal_map * 255).astype(np.uint8)
-        return Image.fromarray(normal_map) 
+    if load_immediately:
+        predictor.load_model()
+    
+    return predictor 

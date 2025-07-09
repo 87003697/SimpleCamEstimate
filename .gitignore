@@ -70,4 +70,4 @@ models/dust3r/*.pth
 # Temporary files
 *.obj
 *.glb.tmp
-*.png.tmp 
+*.png.tmp weights/

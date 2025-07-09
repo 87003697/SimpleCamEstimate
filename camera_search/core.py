@@ -10,7 +10,7 @@ import atexit
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any, TYPE_CHECKING
 import torch
-import cv2
+from PIL import Image
 import numpy as np
 from pathlib import Path
 from scipy.spatial.distance import cdist
@@ -667,28 +667,17 @@ class CleanV2M4CameraSearch:
     
     def _load_image(self, image_path: str, use_normal: bool = False) -> torch.Tensor:
         """加载图像文件，可选择转换为法线图"""
+        # 统一使用PIL加载图像
+        image_pil = Image.open(image_path).convert('RGB')
+
         if use_normal:
             # 使用Normal predictor生成法线图
             print("   🎨 Converting to normal map...")
-            
-            # 先加载为PIL图像
-            from PIL import Image
-            image_pil = Image.open(image_path).convert('RGB')
-            
-            # 通过normal predictor生成法线图
-            normal_pil = self.normal_predictor.predict(image_pil)
-            
-            # 转换为numpy数组，然后转为tensor
-            normal_array = np.array(normal_pil, dtype=np.float32)
-            return torch.from_numpy(normal_array)
-        else:
-            # 正常加载图像
-            image = cv2.imread(image_path)
-            if image is None:
-                raise ValueError(f"Could not load image: {image_path}")
-            # 转换为RGB并确保数据类型为float32，范围[0,255]
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            return torch.from_numpy(rgb_image.astype(np.float32))
+            image_pil = self.normal_predictor.predict(image_pil)
+        
+        # 统一的PIL→tensor转换
+        image_array = np.array(image_pil, dtype=np.float32)
+        return torch.from_numpy(image_array)
     
     def _sample_sphere_poses(self) -> List[CameraPose]:
         """步骤1: 球面等面积采样"""

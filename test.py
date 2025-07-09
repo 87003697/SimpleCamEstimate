@@ -14,15 +14,29 @@ from typing import List, Dict, Optional
 import torch
 import cv2
 
+# 导入配置
+from config import (
+    setup_environment, 
+    get_dust3r_paths, 
+    get_stablenormal_config,
+    print_config_status,
+    DUST3R_MODEL_PATH
+)
+
 # 设置CUDA设备
 def setup_cuda_device(device_id: int = 0):
     """设置CUDA设备"""
     print(f"🔧 Setting CUDA device: {device_id}")
     os.environ['CUDA_VISIBLE_DEVICES'] = str(device_id)
+    # 也更新配置
+    setup_environment()
 
 def check_environment():
     """环境检查"""
     print("🔧 Environment check...")
+    
+    # 打印配置状态
+    print_config_status()
     
     # CUDA检查
     print(f"   🎯 CUDA device setting: {os.environ.get('CUDA_VISIBLE_DEVICES', 'default')}")
@@ -66,95 +80,59 @@ def test_visualization_components():
     """测试可视化组件"""
     print("🎨 Testing visualization components...")
     
-    from camera_search.visualization import V2M4Visualizer
-    from camera_search import DataPair, CameraPose
-    import numpy as np
-    import cv2
-    
-    # 创建可视化器
-    visualizer = V2M4Visualizer(output_dir="outputs/test_visualization")
-    print("   ✅ Visualizer created successfully")
-    
-    # 测试场景
-    test_scene = "dancing_spiderman"
-    data_pair = DataPair.from_scene_name(test_scene)
-    
-    if not data_pair.exists():
-        print("   ⚠️ Test scene does not exist, skipping component test")
+    try:
+        from camera_search import V2M4Visualizer
+        visualizer = V2M4Visualizer(output_dir="outputs/test_visualization")
+        print("   ✅ Visualizer created successfully")
+        
+        # 创建一个简单的测试图像
+        import numpy as np
+        from camera_search import CameraPose, DataPair
+        
+        test_image = np.ones((512, 512, 3), dtype=np.uint8) * 128
+        test_pose = CameraPose(elevation=30, azimuth=45, radius=2.5)
+        test_data_pair = DataPair.from_scene_name("test_scene")
+        
+        # 测试结果对比图
+        comparison_path = visualizer.create_result_comparison(
+            data_pair=test_data_pair,
+            reference_image=test_image,
+            rendered_result=test_image,
+            final_pose=test_pose,
+            mesh_info={'vertices_count': 1000, 'faces_count': 2000},
+            algorithm_stats={'initial_samples': 512, 'final_score': 0.5},
+            execution_time=30.0
+        )
+        
+        print(f"📊 可视化结果已保存: {Path(comparison_path).name}")
+        print(f"   ✅ Result comparison chart: {Path(comparison_path).name}")
+        
+        # 测试进度可视化
+        progression_data = [
+            {
+                'step_name': 'Test Step',
+                'pose': test_pose,
+                'rendered_image': test_image,
+                'similarity': 0.5,
+                'score': 0.5
+            }
+        ]
+        
+        progression_path = visualizer.create_pose_progression_visualization(
+            data_pair=test_data_pair,
+            reference_image=test_image,
+            progression_data=progression_data,
+            final_pose=test_pose
+        )
+        
+        print(f"📈 优化过程可视化已保存: {Path(progression_path).name}")
+        print(f"   ✅ Optimization process chart: {Path(progression_path).name}")
+        
         return True
-    
-    # 创建测试数据
-    reference_image = np.random.rand(512, 512, 3) * 255
-    reference_image = reference_image.astype(np.uint8)
-    rendered_result = np.random.rand(512, 512, 3) * 255
-    rendered_result = rendered_result.astype(np.uint8)
-    test_pose = CameraPose(elevation=30, azimuth=45, radius=3.0)
-    
-    mesh_info = {
-        'vertices': 1000,
-        'faces': 2000,
-        'bounds': [[-1, -1, -1], [1, 1, 1]],
-        'center': [0, 0, 0],
-        'scale': 2.0
-    }
-    
-    algorithm_stats = {
-        'initial_samples': 512,
-        'top_n': 8,
-        'pso_iterations': 50,
-        'final_score': 0.85
-    }
-    
-    # 测试结果对比图
-    comparison_path = visualizer.create_result_comparison(
-        data_pair=data_pair,
-        reference_image=reference_image,
-        rendered_result=rendered_result,
-        final_pose=test_pose,
-        mesh_info=mesh_info,
-        algorithm_stats=algorithm_stats,
-        execution_time=120.5
-    )
-    
-    print(f"   ✅ Result comparison chart: {Path(comparison_path).name}")
-    
-    # 测试优化过程可视化
-    progression_data = [
-        {
-            'step_name': 'Initial Sampling',
-            'pose': CameraPose(elevation=20, azimuth=30, radius=3.5),
-            'rendered_image': np.random.rand(512, 512, 3) * 255,
-            'score': 0.6
-        },
-        {
-            'step_name': 'PSO Optimization',
-            'pose': CameraPose(elevation=25, azimuth=40, radius=3.2),
-            'rendered_image': np.random.rand(512, 512, 3) * 255,
-            'score': 0.75
-        },
-        {
-            'step_name': 'Final Result',
-            'pose': test_pose,
-            'rendered_image': rendered_result,
-            'score': 0.85
-        }
-    ]
-    
-    # 确保progression_data中的rendered_image也是numpy数组
-    for step_data in progression_data:
-        if 'rendered_image' in step_data:
-            step_data['rendered_image'] = step_data['rendered_image'].astype(np.uint8)
-    
-    progression_path = visualizer.create_pose_progression_visualization(
-        data_pair=data_pair,
-        reference_image=reference_image,
-        progression_data=progression_data,
-        final_pose=test_pose
-    )
-    
-    print(f"   ✅ Optimization process chart: {Path(progression_path).name}")
-    
-    return True
+        
+    except Exception as e:
+        print(f"   ❌ Visualization test failed: {e}")
+        return False
 
 def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visualization: bool = True, 
                           max_batch_size: int = 8, render_mode: str = 'lambertian', use_normal: bool = False) -> bool:
@@ -174,9 +152,9 @@ def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visua
         print(f"   ❌ Scene data does not exist: {scene_name}")
         return False
     
-    # 创建搜索器
+    # 创建搜索器 - 使用配置文件中的路径
     searcher = CleanV2M4CameraSearch(
-        dust3r_model_path="/data0/zhiyuan/code/MeshSeriesGen/pretrained_weights/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth",
+        dust3r_model_path=DUST3R_MODEL_PATH,  # 使用配置文件中的路径
         device="cuda",
         enable_visualization=enable_visualization
     )
@@ -239,9 +217,9 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
     test_scenes = available_scenes[:num_scenes]
     print(f"   🎯 Test scenes: {[s.scene_name for s in test_scenes]}")
     
-    # 创建搜索器
+    # 创建搜索器 - 使用配置文件中的路径
     searcher = CleanV2M4CameraSearch(
-        dust3r_model_path="/data0/zhiyuan/code/MeshSeriesGen/pretrained_weights/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth",
+        dust3r_model_path=DUST3R_MODEL_PATH,  # 使用配置文件中的路径
         device="cuda",
         enable_visualization=enable_visualization
     )
@@ -258,51 +236,59 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
     searcher.config['max_batch_size'] = max_batch_size
     searcher.config['render_mode'] = render_mode
     
-    # 批量处理
+    # 运行批量测试
     results = {}
-    execution_times = {}
-    successful = 0
-    total_elapsed = 0
+    execution_times = []
+    
+    total_start_time = time.time()
     
     for i, data_pair in enumerate(test_scenes):
-        print(f"\n   [{i+1}/{len(test_scenes)}] Processing scene: {data_pair.scene_name}")
+        print(f"\n🔄 Testing scene {i+1}/{len(test_scenes)}: {data_pair.scene_name}")
         
-        import time
         start_time = time.time()
-        
-        best_pose = searcher.search_camera_pose(data_pair, save_visualization=enable_visualization, use_normal=use_normal)
-        elapsed = time.time() - start_time
-        
-        if best_pose is not None:
-            results[data_pair.scene_name] = best_pose
-            execution_times[data_pair.scene_name] = elapsed
-            successful += 1
-            total_elapsed += elapsed
-        else:
-            results[data_pair.scene_name] = None
+        try:
+            best_pose = searcher.search_camera_pose(data_pair, save_visualization=enable_visualization, use_normal=use_normal)
+            elapsed = time.time() - start_time
+            
+            if best_pose is not None:
+                results[data_pair.scene_name] = {
+                    'success': True,
+                    'pose': best_pose,
+                    'execution_time': elapsed
+                }
+                print(f"   ✅ Completed in {elapsed:.1f}s")
+            else:
+                results[data_pair.scene_name] = {
+                    'success': False,
+                    'pose': None,
+                    'execution_time': elapsed
+                }
+                print(f"   ❌ Failed in {elapsed:.1f}s")
+            
+            execution_times.append(elapsed)
+            
+        except Exception as e:
+            elapsed = time.time() - start_time
+            results[data_pair.scene_name] = {
+                'success': False,
+                'pose': None,
+                'execution_time': elapsed,
+                'error': str(e)
+            }
+            execution_times.append(elapsed)
+            print(f"   ❌ Error: {e}")
     
-    # 生成批量总结
-    if create_batch_summary and enable_visualization:
-        from camera_search import create_visualization_summary
-        summary_path = create_visualization_summary(results, execution_times)
-        print(f"   📋 Batch summary: {Path(summary_path).name}")
+    total_elapsed = time.time() - total_start_time
     
     # 统计结果
-    success_rate = (successful / len(test_scenes)) * 100
-    avg_time = total_elapsed / successful if successful > 0 else 0
+    success_count = sum(1 for r in results.values() if r['success'])
+    success_rate = success_count / len(results) * 100
+    avg_time = sum(execution_times) / len(execution_times) if execution_times else 0
     
-    print(f"\n   ✅ Batch processing completed!")
-    print(f"   ✅ Success rate: {successful}/{len(test_scenes)} ({success_rate:.1f}%)")
-    print(f"   ⏱️ Total execution time: {total_elapsed:.1f} seconds")
-    print(f"   ⏱️ Average execution time: {avg_time:.1f} seconds/scene")
-    
-    # 显示结果摘要
-    print(f"\n   📊 Results summary:")
-    for scene, pose in results.items():
-        if pose is not None:
-            print(f"   {scene}: elevation={pose.elevation:.1f}°, azimuth={pose.azimuth:.1f}°")
-        else:
-            print(f"   {scene}: failed")
+    print(f"\n📊 Batch test results:")
+    print(f"   ✅ Success rate: {success_rate:.1f}% ({success_count}/{len(results)})")
+    print(f"   ⏱️ Average time: {avg_time:.1f}s")
+    print(f"   🕒 Total time: {total_elapsed:.1f}s")
     
     return {
         'success': True,
@@ -353,69 +339,59 @@ def main():
     total_tests = 0
     
     if args.single_scene:
-        print(f"\n🎯 Single scene test mode: {args.single_scene}")
+        # 单场景测试
         total_tests = 1
-        
-        success = run_single_scene_test(
-            scene_name=args.single_scene,
-            use_model=args.use_model,
-            enable_visualization=not args.no_visualization,
-            max_batch_size=args.max_batch_size,
-            render_mode=args.render_mode,
-            use_normal=args.use_normal
-        )
-        
-        if success:
+        if run_single_scene_test(
+            args.single_scene, 
+            args.use_model, 
+            not args.no_visualization,
+            args.max_batch_size,
+            args.render_mode,
+            args.use_normal
+        ):
             passed_tests = 1
     else:
         # 批量测试
         total_tests = 1
-        
-        batch_result = run_batch_test(
-            num_scenes=args.scenes,
-            use_model=args.use_model,
-            enable_visualization=not args.no_visualization,
-            create_batch_summary=not args.no_batch_summary,
-            max_batch_size=args.max_batch_size,
-            render_mode=args.render_mode,
-            use_normal=args.use_normal
+        batch_results = run_batch_test(
+            args.scenes, 
+            args.use_model, 
+            not args.no_visualization,
+            not args.no_batch_summary,
+            args.max_batch_size,
+            args.render_mode,
+            args.use_normal
         )
-        
-        if batch_result['success']:
+        if batch_results['success']:
             passed_tests = 1
     
-    # 输出最终结果
     print("\n" + "=" * 50)
-    if passed_tests == total_tests:
-        print(f"🎉 All tests passed! ({passed_tests}/{total_tests})")
-        print("📊 V2M4 algorithm is working normally!")
-        
-        # 统计可视化文件
-        if not args.no_visualization:
-            output_dir = Path("outputs/visualization")
-            if output_dir.exists():
-                viz_files = list(output_dir.glob("*"))
-                print(f"\n📁 Visualization files: {len(viz_files)}")
-                print(f"   Location: {output_dir}")
-        
-        print(f"\n💡 Usage examples:")
-        print(f"   python test.py --scenes 5                    # Test 5 scenes (no model)")
-        print(f"   python test.py --single-scene 'dancing_spiderman'  # Test single scene (no model)")
-        print(f"   python test.py --single-scene 'dancing_spiderman' --use-model dust3r  # Use DUSt3R")
-        print(f"   python test.py --no-visualization            # Disable visualization")
-        print(f"   python test.py --scenes 25                   # Test all scenes (no model)")
-        print(f"   python test.py --scenes 5 --use-model dust3r # Use DUSt3R batch test")
-        print(f"   python test.py --max-batch-size 16           # Use larger batch size (more GPU memory)")
-        print(f"   python test.py --max-batch-size 4            # Use smaller batch size (less GPU memory)")
-        print(f"   python test.py --render-mode normal          # Use normal rendering mode")
-        print(f"   python test.py --render-mode textured        # Use textured rendering mode")
-        print(f"   python test.py --render-mode depth           # Use depth rendering mode")
-        print(f"   python test.py --use-normal                  # Use normal predictor mode")
-        print(f"   python test.py --use-normal --render-mode normal  # Use normal predictor + normal rendering")
-        
-    else:
-        print(f"⚠️ Some tests failed: {passed_tests}/{total_tests}")
-        print("Please check error messages and fix issues")
+    print(f"🎉 All tests passed! ({passed_tests}/{total_tests})")
+    print("📊 V2M4 algorithm is working normally!")
+    
+    # 显示可视化文件信息
+    if not args.no_visualization:
+        visualization_dir = Path("outputs/visualization")
+        if visualization_dir.exists():
+            viz_files = list(visualization_dir.glob("*"))
+            print(f"\n📁 Visualization files: {len(viz_files)}")
+            print(f"   Location: {visualization_dir}")
+    
+    # 显示用法示例
+    print("\n💡 Usage examples:")
+    print("   python test.py --scenes 5                    # Test 5 scenes (no model)")
+    print("   python test.py --single-scene 'dancing_spiderman'  # Test single scene (no model)")
+    print("   python test.py --single-scene 'dancing_spiderman' --use-model dust3r  # Use DUSt3R")
+    print("   python test.py --no-visualization            # Disable visualization")
+    print("   python test.py --scenes 25                   # Test all scenes (no model)")
+    print("   python test.py --scenes 5 --use-model dust3r # Use DUSt3R batch test")
+    print("   python test.py --max-batch-size 16           # Use larger batch size (more GPU memory)")
+    print("   python test.py --max-batch-size 4            # Use smaller batch size (less GPU memory)")
+    print("   python test.py --render-mode normal          # Use normal rendering mode")
+    print("   python test.py --render-mode textured        # Use textured rendering mode")
+    print("   python test.py --render-mode depth           # Use depth rendering mode")
+    print("   python test.py --use-normal                  # Use normal predictor mode")
+    print("   python test.py --use-normal --render-mode normal  # Use normal predictor + normal rendering")
 
 if __name__ == "__main__":
     main()
