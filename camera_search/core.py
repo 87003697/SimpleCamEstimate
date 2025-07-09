@@ -8,14 +8,17 @@ import sys
 import tempfile
 import atexit
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, TYPE_CHECKING
 import torch
 import cv2
-import trimesh
 import numpy as np
 from pathlib import Path
 from scipy.spatial.distance import cdist
 import random
+
+# 类型导入
+if TYPE_CHECKING:
+    from kiui.mesh import Mesh as KiuiMesh
 
 @dataclass
 class CameraPose:
@@ -100,23 +103,17 @@ class DataPair:
         """检查数据对是否存在"""
         return Path(self.mesh_path).exists() and Path(self.image_path).exists()
     
-    def load_mesh(self) -> trimesh.Trimesh:
-        """加载mesh对象"""
+    def load_mesh(self) -> 'KiuiMesh':
+        """加载mesh对象 - 使用kiui.Mesh保持原始几何"""
         if not Path(self.mesh_path).exists():
             raise FileNotFoundError(f"Mesh file not found: {self.mesh_path}")
         
-        loaded = trimesh.load(self.mesh_path)
-        
-        # 处理GLB文件可能返回Scene对象的情况
-        if hasattr(loaded, 'geometry') and loaded.geometry:
-            # Scene对象，提取第一个几何体
-            mesh_name = list(loaded.geometry.keys())[0]
-            return loaded.geometry[mesh_name]
-        elif hasattr(loaded, 'vertices'):
-            # 直接是Mesh对象
-            return loaded
-        else:
-            raise ValueError(f"Could not extract mesh from file: {self.mesh_path}")
+        from kiui.mesh import Mesh as KiuiMesh
+        return KiuiMesh.load(
+            self.mesh_path,
+            resize=False,    # 保持原始尺寸
+            renormal=False   # 保持原始法线
+        )
 
 class DataManager:
     """数据发现和验证管理器"""
@@ -288,13 +285,11 @@ class GeometryUtils:
         return (forward + backward).item() / 2.0
 
 class MeshRenderer:
-    """Mesh渲染器 - 基于StandardKiuiRenderer"""
+    """Mesh渲染器 - 直接使用kiui.Mesh对象"""
     
     def __init__(self, device: str = "cuda"):
         self.device = device
         self._renderer = None
-        self._cached_mesh_path = None
-        self._mesh_loaded = False
         
         # 检查依赖
         self._check_dependencies()
@@ -328,41 +323,10 @@ class MeshRenderer:
             )
         return self._renderer
     
-    def prepare_mesh(self, mesh: trimesh.Trimesh) -> str:
-        """准备mesh用于渲染 - 导出为临时文件"""
-        if self._cached_mesh_path is None:
-            # 创建持久的临时文件
-            temp_fd, temp_path = tempfile.mkstemp(suffix='.obj', prefix='v2m4_mesh_')
-            os.close(temp_fd)
-            
-            # 导出mesh
-            mesh.export(temp_path)
-            self._cached_mesh_path = temp_path
-            
-            # 注册清理函数
-            def cleanup_cached_mesh():
-                if self._cached_mesh_path and os.path.exists(self._cached_mesh_path):
-                    os.unlink(self._cached_mesh_path)
-            atexit.register(cleanup_cached_mesh)
-        
-        return self._cached_mesh_path
-    
-    def load_mesh_to_renderer(self, mesh_path: str):
-        """加载mesh到渲染器"""
-        if not self._mesh_loaded or self.renderer.mesh_path_loaded != mesh_path:
-            loaded_mesh = self.renderer.load_mesh(mesh_path)
-            if loaded_mesh is None:
-                raise RuntimeError(f"Could not load mesh to renderer: {mesh_path}")
-            self._mesh_loaded = True
-    
-    def render_single_view(self, mesh: trimesh.Trimesh, pose: CameraPose) -> torch.Tensor:
-        """渲染单个视图"""
-        # 准备mesh
-        mesh_path = self.prepare_mesh(mesh)
-        self.load_mesh_to_renderer(mesh_path)
-        
-        # 渲染
+    def render_single_view(self, mesh: 'KiuiMesh', pose: CameraPose) -> torch.Tensor:
+        """渲染单个视图 - 直接使用kiui.Mesh对象"""
         rendered_img = self.renderer.render_single_view(
+            loaded_mesh_obj=mesh,
             elevation=pose.elevation,
             azimuth=pose.azimuth,
             distance=pose.radius,
@@ -375,13 +339,9 @@ class MeshRenderer:
         
         return rendered_img
     
-    def render_batch_views(self, mesh: trimesh.Trimesh, poses: List[CameraPose], 
+    def render_batch_views(self, mesh: 'KiuiMesh', poses: List[CameraPose], 
                           max_batch_size: int = 8) -> List[torch.Tensor]:
-        """批量渲染多个视图"""
-        # 准备mesh
-        mesh_path = self.prepare_mesh(mesh)
-        self.load_mesh_to_renderer(mesh_path)
-        
+        """批量渲染多个视图 - 直接使用kiui.Mesh对象"""
         # 准备批量渲染参数
         camera_params = []
         for pose in poses:
@@ -394,6 +354,7 @@ class MeshRenderer:
         
         # 执行批量渲染
         rendered_images = self.renderer.render_batch_views(
+            loaded_mesh_obj=mesh,
             camera_params=camera_params,
             render_mode='lambertian',
             max_batch_size=max_batch_size
@@ -532,13 +493,18 @@ class CleanV2M4CameraSearch:
         
         # 收集mesh信息用于可视化
         if self.enable_visualization:
-            bounds = mesh.bounds
+            # 获取mesh的aabb边界框 (返回tuple: (min_bounds, max_bounds))
+            aabb_bounds = mesh.aabb()
+            aabb_min, aabb_max = aabb_bounds
+            mesh_center = (aabb_min + aabb_max) / 2
+            mesh_scale = torch.linalg.norm(aabb_max - aabb_min)
+            
             self.visualization_data['mesh_info'] = {
-                'vertices_count': len(mesh.vertices),
-                'faces_count': len(mesh.faces),
-                'bounds': bounds.tolist(),
-                'center': mesh.centroid.tolist(),
-                'scale': float(torch.linalg.norm(torch.from_numpy(bounds[1] - bounds[0]).float()))
+                'vertices_count': len(mesh.v),
+                'faces_count': len(mesh.f),
+                'bounds': [aabb_min.tolist(), aabb_max.tolist()],
+                'center': mesh_center.tolist(),
+                'scale': float(mesh_scale)
             }
         
         # 步骤1: 采样初始相机pose
@@ -684,7 +650,7 @@ class CleanV2M4CameraSearch:
         """步骤1: 球面等面积采样"""
         return GeometryUtils.sample_sphere_poses(self.config['initial_samples'])
     
-    def _select_top_poses(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor, 
+    def _select_top_poses(self, mesh: 'KiuiMesh', reference_image: torch.Tensor, 
                          poses: List[CameraPose]) -> List[CameraPose]:
         """步骤2: 基于相似度选择top-n - 优化批量渲染以避免nvdiffrast卡住"""
         
@@ -730,7 +696,7 @@ class CleanV2M4CameraSearch:
         
         return selected_poses
     
-    def _model_estimation(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor, 
+    def _model_estimation(self, mesh: 'KiuiMesh', reference_image: torch.Tensor, 
                          top_poses: List[CameraPose]) -> Optional[CameraPose]:
         """步骤3-4: 模型估计 - 核心几何约束 (DUSt3R或VGGT)"""
         
@@ -760,7 +726,7 @@ class CleanV2M4CameraSearch:
         
         return best_pose
     
-    def _pso_search(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor,
+    def _pso_search(self, mesh: 'KiuiMesh', reference_image: torch.Tensor,
                    model_pose: Optional[CameraPose], top_poses: List[CameraPose]) -> CameraPose:
         """步骤5-6: PSO搜索 - 支持批量和传统优化"""
         
@@ -808,7 +774,7 @@ class CleanV2M4CameraSearch:
             
             return self.optimizer.pso_optimize(objective, candidates, bounds)
     
-    def _gradient_refinement(self, mesh: trimesh.Trimesh, reference_image: torch.Tensor,
+    def _gradient_refinement(self, mesh: 'KiuiMesh', reference_image: torch.Tensor,
                            initial_pose: CameraPose) -> CameraPose:
         """步骤7-8: 梯度下降精化 - 支持批量和传统优化"""
         

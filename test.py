@@ -84,8 +84,10 @@ def test_visualization_components():
         return True
     
     # 创建测试数据
-    reference_image = torch.rand(512, 512, 3) * 255
-    rendered_result = torch.rand(512, 512, 3) * 255
+    reference_image = np.random.rand(512, 512, 3) * 255
+    reference_image = reference_image.astype(np.uint8)
+    rendered_result = np.random.rand(512, 512, 3) * 255
+    rendered_result = rendered_result.astype(np.uint8)
     test_pose = CameraPose(elevation=30, azimuth=45, radius=3.0)
     
     mesh_info = {
@@ -121,13 +123,13 @@ def test_visualization_components():
         {
             'step_name': 'Initial Sampling',
             'pose': CameraPose(elevation=20, azimuth=30, radius=3.5),
-            'rendered_image': torch.rand(512, 512, 3) * 255,
+            'rendered_image': np.random.rand(512, 512, 3) * 255,
             'score': 0.6
         },
         {
             'step_name': 'PSO Optimization',
             'pose': CameraPose(elevation=25, azimuth=40, radius=3.2),
-            'rendered_image': torch.rand(512, 512, 3) * 255,
+            'rendered_image': np.random.rand(512, 512, 3) * 255,
             'score': 0.75
         },
         {
@@ -137,6 +139,11 @@ def test_visualization_components():
             'score': 0.85
         }
     ]
+    
+    # 确保progression_data中的rendered_image也是numpy数组
+    for step_data in progression_data:
+        if 'rendered_image' in step_data:
+            step_data['rendered_image'] = step_data['rendered_image'].astype(np.uint8)
     
     progression_path = visualizer.create_pose_progression_visualization(
         data_pair=data_pair,

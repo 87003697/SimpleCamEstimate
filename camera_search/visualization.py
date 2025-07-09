@@ -11,7 +11,6 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from PIL import Image
-import trimesh
 
 from .core import CameraPose, DataPair
 from .utils import compute_image_similarity
