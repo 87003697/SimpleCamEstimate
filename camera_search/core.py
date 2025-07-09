@@ -379,7 +379,7 @@ class MeshRenderer:
         return valid_images
 
 class CleanV2M4CameraSearch:
-    """简化的V2M4相机搜索算法 - 核心实现"""
+    """清理版V2M4相机搜索算法 - 专注于核心功能"""
     
     def __init__(self, dust3r_model_path: str, device: str = "cuda", enable_visualization: bool = True):
         self.dust3r_model_path = dust3r_model_path
@@ -422,6 +422,7 @@ class CleanV2M4CameraSearch:
         self._renderer = None
         self._optimizer = None
         self._visualizer = None
+        self._normal_predictor = None
         
         # 根据配置更新模型名称
         if self.config['use_dust3r']:
@@ -450,6 +451,14 @@ class CleanV2M4CameraSearch:
         if self._renderer is None:
             self._renderer = MeshRenderer(self.device, self.config['render_mode'])
         return self._renderer
+    
+    @property
+    def normal_predictor(self):
+        """延迟初始化Normal预测器"""
+        if self._normal_predictor is None:
+            from .normal_predictor import SimpleNormalPredictor
+            self._normal_predictor = SimpleNormalPredictor(self.device)
+        return self._normal_predictor
     
     @property
     def optimizer(self):
@@ -484,7 +493,7 @@ class CleanV2M4CameraSearch:
             self._visualizer = V2M4Visualizer(output_dir="outputs/visualization")
         return self._visualizer
     
-    def search_camera_pose(self, data_pair: DataPair, save_visualization: bool = True) -> CameraPose:
+    def search_camera_pose(self, data_pair: DataPair, save_visualization: bool = True, use_normal: bool = False) -> CameraPose:
         """主算法入口 - V2M4的9个核心步骤"""
         
         import time
@@ -495,12 +504,19 @@ class CleanV2M4CameraSearch:
         print(f"   Mesh: {data_pair.mesh_path}")
         print(f"   Image: {data_pair.image_path}")
         
+        # 如果使用normal模式，自动设置渲染器为normal模式
+        if use_normal:
+            print("🎨 Using Normal prediction mode")
+            self.config['render_mode'] = 'normal'
+            # 重置渲染器以使用新的模式
+            self._renderer = None
+        
         # 验证数据存在
         if not data_pair.exists():
             raise FileNotFoundError(f"Data pair incomplete: {data_pair.scene_name}")
         
         # 加载数据
-        reference_image = self._load_image(data_pair.image_path)
+        reference_image = self._load_image(data_pair.image_path, use_normal=use_normal)
         mesh = data_pair.load_mesh()
         
         # 收集mesh信息用于可视化
@@ -649,14 +665,30 @@ class CleanV2M4CameraSearch:
         
         return final_pose
     
-    def _load_image(self, image_path: str) -> torch.Tensor:
-        """加载图像文件"""
-        image = cv2.imread(image_path)
-        if image is None:
-            raise ValueError(f"Could not load image: {image_path}")
-        # 转换为RGB并确保数据类型为float32，范围[0,255]
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        return torch.from_numpy(rgb_image.astype(np.float32))
+    def _load_image(self, image_path: str, use_normal: bool = False) -> torch.Tensor:
+        """加载图像文件，可选择转换为法线图"""
+        if use_normal:
+            # 使用Normal predictor生成法线图
+            print("   🎨 Converting to normal map...")
+            
+            # 先加载为PIL图像
+            from PIL import Image
+            image_pil = Image.open(image_path).convert('RGB')
+            
+            # 通过normal predictor生成法线图
+            normal_pil = self.normal_predictor.predict(image_pil)
+            
+            # 转换为numpy数组，然后转为tensor
+            normal_array = np.array(normal_pil, dtype=np.float32)
+            return torch.from_numpy(normal_array)
+        else:
+            # 正常加载图像
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Could not load image: {image_path}")
+            # 转换为RGB并确保数据类型为float32，范围[0,255]
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            return torch.from_numpy(rgb_image.astype(np.float32))
     
     def _sample_sphere_poses(self) -> List[CameraPose]:
         """步骤1: 球面等面积采样"""

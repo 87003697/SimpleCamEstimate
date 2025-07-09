@@ -8,11 +8,13 @@ Pillow>=8.0.0
 scikit-image>=0.18.0
 torch>=1.9.0
 torchvision>=0.10.0
-trimesh>=3.10.0
 matplotlib>=3.5.0
 tqdm>=4.60.0
 kiui>=0.2.0          # 高质量渲染 (必需)
 nvdiffrast            # GPU加速渲染 (必需)
+
+# 移除的依赖
+# trimesh>=3.10.0      # 已移除: 使用kiui.mesh替代，性能更好
 
 # 安装说明:
 # 标准安装: pip install -r requirements.txt

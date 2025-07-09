@@ -157,12 +157,14 @@ def test_visualization_components():
     return True
 
 def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visualization: bool = True, 
-                          max_batch_size: int = 8, render_mode: str = 'lambertian') -> bool:
+                          max_batch_size: int = 8, render_mode: str = 'lambertian', use_normal: bool = False) -> bool:
     """运行单场景测试"""
     model_name = use_model.upper() if use_model != 'none' else 'None (Skip Model Step)'
     print(f"🎬 Testing scene: {scene_name} (using {model_name})")
     print(f"   🔧 Max batch size: {max_batch_size}")
     print(f"   🎨 Render mode: {render_mode}")
+    if use_normal:
+        print(f"   🎨 Using normal predictor mode")
     
     from camera_search import DataPair, CleanV2M4CameraSearch
     
@@ -196,28 +198,20 @@ def run_single_scene_test(scene_name: str, use_model: str = 'none', enable_visua
     import time
     start_time = time.time()
     
-    best_pose = searcher.search_camera_pose(data_pair, save_visualization=enable_visualization)
+    best_pose = searcher.search_camera_pose(data_pair, save_visualization=enable_visualization, use_normal=use_normal)
     elapsed = time.time() - start_time
     
     if best_pose is not None:
-        print(f"   ✅ Success! Pose: elevation={best_pose.elevation:.1f}°, azimuth={best_pose.azimuth:.1f}°, distance={best_pose.radius:.2f}")
-        print(f"   ⏱️ Execution time: {elapsed:.1f} seconds")
-        print(f"   🤖 Model: {model_name}")
-        
-        # 统计可视化文件
-        if enable_visualization:
-            output_dir = Path("outputs/visualization")
-            viz_files = list(output_dir.glob("*"))
-            print(f"   📊 Visualization files: {len(viz_files)}")
-        
+        print(f"   ✅ Algorithm completed in {elapsed:.1f} seconds")
+        print(f"   📊 Final pose: {best_pose}")
         return True
     else:
-        print(f"   ❌ Algorithm execution failed")
+        print(f"   ❌ Algorithm failed")
         return False
 
 def run_batch_test(num_scenes: int = 5, use_model: str = 'none', 
                   enable_visualization: bool = True, create_batch_summary: bool = True,
-                  max_batch_size: int = 8, render_mode: str = 'lambertian') -> Dict:
+                  max_batch_size: int = 8, render_mode: str = 'lambertian', use_normal: bool = False) -> Dict:
     """运行批量测试"""
     model_name = use_model.upper() if use_model != 'none' else 'None (Skip Model Step)'
     
@@ -226,6 +220,8 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
     print(f"   📋 Batch summary: {'enabled' if create_batch_summary else 'disabled'}")
     print(f"   🔧 Max batch size: {max_batch_size}")
     print(f"   🎨 Render mode: {render_mode}")
+    if use_normal:
+        print(f"   🎨 Using normal predictor mode")
     
     from camera_search import DataManager, CleanV2M4CameraSearch
     
@@ -274,7 +270,7 @@ def run_batch_test(num_scenes: int = 5, use_model: str = 'none',
         import time
         start_time = time.time()
         
-        best_pose = searcher.search_camera_pose(data_pair, save_visualization=enable_visualization)
+        best_pose = searcher.search_camera_pose(data_pair, save_visualization=enable_visualization, use_normal=use_normal)
         elapsed = time.time() - start_time
         
         if best_pose is not None:
@@ -331,6 +327,8 @@ def main():
                        help='Maximum batch size for rendering (default: 8, larger values use more GPU memory)')
     parser.add_argument('--render-mode', type=str, choices=['lambertian', 'normal', 'textured', 'depth'], default='lambertian',
                        help='Render mode for rendering the 3D model (default: lambertian)')
+    parser.add_argument('--use-normal', action='store_true', 
+                       help='Use normal predictor to convert input image to normal map before matching')
     
     args = parser.parse_args()
     
@@ -363,7 +361,8 @@ def main():
             use_model=args.use_model,
             enable_visualization=not args.no_visualization,
             max_batch_size=args.max_batch_size,
-            render_mode=args.render_mode
+            render_mode=args.render_mode,
+            use_normal=args.use_normal
         )
         
         if success:
@@ -378,7 +377,8 @@ def main():
             enable_visualization=not args.no_visualization,
             create_batch_summary=not args.no_batch_summary,
             max_batch_size=args.max_batch_size,
-            render_mode=args.render_mode
+            render_mode=args.render_mode,
+            use_normal=args.use_normal
         )
         
         if batch_result['success']:
@@ -410,6 +410,8 @@ def main():
         print(f"   python test.py --render-mode normal          # Use normal rendering mode")
         print(f"   python test.py --render-mode textured        # Use textured rendering mode")
         print(f"   python test.py --render-mode depth           # Use depth rendering mode")
+        print(f"   python test.py --use-normal                  # Use normal predictor mode")
+        print(f"   python test.py --use-normal --render-mode normal  # Use normal predictor + normal rendering")
         
     else:
         print(f"⚠️ Some tests failed: {passed_tests}/{total_tests}")
