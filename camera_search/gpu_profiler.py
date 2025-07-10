@@ -136,21 +136,48 @@ class GPUProfiler:
         print("GPU PERFORMANCE PROFILING SUMMARY")
         print("="*80)
         
+        # 定义主要stage和子stage
+        main_stages = ['V2M4_Algorithm', 'Normal_Prediction', 'Top_N_Selection', 'PSO_Search', 'Gradient_Refinement', 'DUSt3R_Estimation']
+        
         # 表头
         print(f"{'Stage':<25} {'Duration':<12} {'GPU Memory (MB)':<20} {'GPU Util (%)':<15}")
         print(f"{'Name':<25} {'(seconds)':<12} {'Start/Peak/End':<20} {'Avg/Peak':<15}")
         print("-" * 80)
         
-        total_duration = 0
+        # 显示主要阶段
+        print("MAIN STAGES:")
+        main_total = 0
         for metrics in self.metrics:
-            total_duration += metrics.duration
-            memory_info = f"{metrics.gpu_memory_start:.0f}/{metrics.gpu_memory_peak:.0f}/{metrics.gpu_memory_end:.0f}"
-            util_info = f"{metrics.gpu_utilization_avg:.1f}/{metrics.gpu_utilization_peak:.1f}"
-            
-            print(f"{metrics.name:<25} {metrics.duration:<12.2f} {memory_info:<20} {util_info:<15}")
+            if metrics.name in main_stages:
+                # 只对非V2M4_Algorithm的主要stage计算总时间，避免重复计算
+                if metrics.name != 'V2M4_Algorithm':
+                    main_total += metrics.duration
+                    
+                memory_info = f"{metrics.gpu_memory_start:.0f}/{metrics.gpu_memory_peak:.0f}/{metrics.gpu_memory_end:.0f}"
+                util_info = f"{metrics.gpu_utilization_avg:.1f}/{metrics.gpu_utilization_peak:.1f}"
+                
+                print(f"{metrics.name:<25} {metrics.duration:<12.2f} {memory_info:<20} {util_info:<15}")
+        
+        # 显示子阶段
+        sub_stages = [m for m in self.metrics if m.name not in main_stages]
+        if sub_stages:
+            print("\nSUB STAGES:")
+            for metrics in sub_stages:
+                memory_info = f"{metrics.gpu_memory_start:.0f}/{metrics.gpu_memory_peak:.0f}/{metrics.gpu_memory_end:.0f}"
+                util_info = f"{metrics.gpu_utilization_avg:.1f}/{metrics.gpu_utilization_peak:.1f}"
+                
+                print(f"  {metrics.name:<23} {metrics.duration:<12.2f} {memory_info:<20} {util_info:<15}")
         
         print("-" * 80)
-        print(f"{'TOTAL':<25} {total_duration:<12.2f}")
+        
+        # 显示总时间信息
+        v2m4_total = next((m.duration for m in self.metrics if m.name == 'V2M4_Algorithm'), 0)
+        if v2m4_total > 0:
+            print(f"{'ACTUAL TOTAL':<25} {v2m4_total:<12.2f} (V2M4_Algorithm)")
+        
+        if main_total > 0:
+            print(f"{'MAIN STAGES TOTAL':<25} {main_total:<12.2f} (excludes V2M4_Algorithm)")
+        
         print("="*80)
 
 # 全局性能监控器实例

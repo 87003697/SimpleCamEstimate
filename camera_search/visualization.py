@@ -13,7 +13,7 @@ from typing import Optional, List, Dict, Any
 from PIL import Image
 
 from .core import CameraPose, DataPair
-from .utils import compute_image_similarity
+from .utils import compute_image_similarity_torch
 
 class V2M4Visualizer:
     """V2M4算法结果可视化器"""
@@ -48,7 +48,7 @@ class V2M4Visualizer:
             axes[1].imshow(rendered_result)
             
             # 计算相似性指标
-            similarity = compute_image_similarity(reference_image, rendered_result)
+            similarity = compute_image_similarity_torch(reference_image, rendered_result)
             
             title = f"V2M4 Estimated Pose\n(Similarity: {similarity:.3f})"
             title_color = 'green' if similarity > 0.7 else 'orange' if similarity > 0.5 else 'red'

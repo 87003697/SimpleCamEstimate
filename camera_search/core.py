@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 # 导入GPU性能监控
 from .gpu_profiler import profile_stage
 
+# Import the functions directly
+from .utils import compute_image_similarity_torch, compute_batch_similarity_torch
+
 @dataclass
 class CameraPose:
     """简化的相机姿态参数 - 与KiuiKit兼容"""
@@ -552,7 +555,7 @@ class CleanV2M4CameraSearch:
         # 可视化：记录top-1姿态
         if self.enable_visualization and top_poses:
             rendered_top1 = self.renderer.render_single_view(mesh, top_poses[0])
-            similarity_top1 = self._compute_similarity(reference_image, rendered_top1)
+            similarity_top1 = compute_image_similarity_torch(reference_image, rendered_top1)
             self.visualization_data['progression'].append({
                 'step_name': 'Top-1 Selection',
                 'pose': top_poses[0],
@@ -571,7 +574,7 @@ class CleanV2M4CameraSearch:
         # 可视化：记录模型结果
         if self.enable_visualization and model_pose:
             rendered_model = self.renderer.render_single_view(mesh, model_pose)
-            similarity_model = self._compute_similarity(reference_image, rendered_model)
+            similarity_model = compute_image_similarity_torch(reference_image, rendered_model)
             self.visualization_data['progression'].append({
                 'step_name': f'{self.config["model_name"].upper()} Align',
                 'pose': model_pose,
@@ -587,7 +590,7 @@ class CleanV2M4CameraSearch:
         # 可视化：记录PSO结果
         if self.enable_visualization:
             rendered_pso = self.renderer.render_single_view(mesh, pso_pose)
-            similarity_pso = self._compute_similarity(reference_image, rendered_pso)
+            similarity_pso = compute_image_similarity_torch(reference_image, rendered_pso)
             self.visualization_data['progression'].append({
                 'step_name': 'PSO Optimize',
                 'pose': pso_pose,
@@ -600,13 +603,13 @@ class CleanV2M4CameraSearch:
         print("🎯 Step 7-8: Gradient descent refinement...")
         final_pose = self._gradient_refinement(mesh, reference_image, pso_pose)
         
-        # 计算执行时间
-        execution_time = time.time() - start_time
+        # 🚀 算法执行完成，计算纯算法执行时间
+        algorithm_execution_time = time.time() - start_time
         
         # 收集算法统计信息
         if self.enable_visualization:
             final_rendered = self.renderer.render_single_view(mesh, final_pose)
-            final_similarity = self._compute_similarity(reference_image, final_rendered)
+            final_similarity = compute_image_similarity_torch(reference_image, final_rendered)
             
             self.visualization_data['progression'].append({
                 'step_name': 'Final Result',
@@ -623,8 +626,9 @@ class CleanV2M4CameraSearch:
                 'final_score': final_similarity
             }
         
-        # 生成可视化结果
+        # 生成可视化结果（不计入算法执行时间）
         if self.enable_visualization and save_visualization and self.visualizer:
+            print("🎨 Generating visualization results...")
             # 创建结果对比图
             final_rendered = self.renderer.render_single_view(mesh, final_pose)
             
@@ -639,7 +643,7 @@ class CleanV2M4CameraSearch:
                 final_pose=final_pose,
                 mesh_info=self.visualization_data['mesh_info'],
                 algorithm_stats=self.visualization_data['algorithm_stats'],
-                execution_time=execution_time
+                execution_time=algorithm_execution_time
             )
             
             # 创建优化过程可视化
@@ -667,7 +671,7 @@ class CleanV2M4CameraSearch:
             )
         
         print("✅ V2M4 camera search completed!")
-        print(f"⏱️ Total execution time: {execution_time:.2f} seconds")
+        print(f"⚡ Algorithm execution time: {algorithm_execution_time:.2f} seconds")
         
         return final_pose
     
@@ -681,9 +685,15 @@ class CleanV2M4CameraSearch:
             print("   🎨 Converting to normal map...")
             image_pil = self.normal_predictor.predict(image_pil)
         
-        # 统一的PIL→tensor转换
-        image_array = np.array(image_pil, dtype=np.float32)
-        return torch.from_numpy(image_array)
+        # 🚀 优化：直接PIL→torch转换，避免numpy
+        import torchvision.transforms as transforms
+        pil_to_tensor = transforms.PILToTensor()
+        image_tensor = pil_to_tensor(image_pil).float()
+        
+        # 转换为HWC格式
+        image_tensor = image_tensor.permute(1, 2, 0)
+        
+        return image_tensor
     
     def _sample_sphere_poses(self) -> List[CameraPose]:
         """步骤1: 球面等面积采样"""
@@ -711,13 +721,9 @@ class CleanV2M4CameraSearch:
                 # 批量渲染这一组，使用配置的max_batch_size
                 rendered_images = self.renderer.render_batch_views(mesh, batch_poses, max_batch_size)
                 
-                # 计算相似度分数
-                for rendered_img in rendered_images:
-                    if rendered_img is not None:
-                        score = self._compute_similarity(reference_image, rendered_img)
-                        scores.append(score)
-                    else:
-                        scores.append(float('inf'))  # 渲染失败，给最差分数
+                # 🚀 批量计算相似度分数 - 性能优化！
+                batch_scores = compute_batch_similarity_torch(reference_image, rendered_images)
+                scores.extend(batch_scores)
                 
                 # 清理GPU内存
                 from .utils import cleanup_gpu_memory
@@ -797,14 +803,7 @@ class CleanV2M4CameraSearch:
                 with torch.no_grad():  # PSO优化不需要梯度，添加no_grad提升性能
                     max_batch_size = self.config.get('max_batch_size', 8)
                     rendered_images = self.renderer.render_batch_views(mesh, poses, max_batch_size)
-                    scores = []
-                    for rendered_img in rendered_images:
-                        if rendered_img is not None:
-                            score = self._compute_similarity(reference_image, rendered_img)
-                            scores.append(score)
-                        else:
-                            scores.append(float('inf'))  # 渲染失败，给最差分数
-                    return scores
+                    return compute_batch_similarity_torch(reference_image, rendered_images)
             
             return self.optimizer.pso_optimize_batch(batch_objective, candidates, bounds)
         else:
@@ -812,7 +811,7 @@ class CleanV2M4CameraSearch:
             def objective(pose: CameraPose) -> float:
                 with torch.no_grad():  # PSO优化不需要梯度，添加no_grad提升性能
                     rendered = self.renderer.render_single_view(mesh, pose)
-                    return self._compute_similarity(reference_image, rendered)
+                    return compute_image_similarity_torch(reference_image, rendered)
             
             return self.optimizer.pso_optimize(objective, candidates, bounds)
     
@@ -827,37 +826,16 @@ class CleanV2M4CameraSearch:
             def batch_objective(poses: List[CameraPose]) -> List[float]:
                 max_batch_size = self.config.get('max_batch_size', 8)
                 rendered_images = self.renderer.render_batch_views(mesh, poses, max_batch_size)
-                scores = []
-                for rendered_img in rendered_images:
-                    if rendered_img is not None:
-                        score = self._compute_similarity(reference_image, rendered_img)
-                        scores.append(score)
-                    else:
-                        scores.append(float('inf'))  # 渲染失败，给最差分数
-                return scores
+                return compute_batch_similarity_torch(reference_image, rendered_images)
             
             return self.optimizer.gradient_descent_batch(batch_objective, initial_pose)
         else:
             # 使用传统单次优化
             def objective(pose: CameraPose) -> float:
                 rendered = self.renderer.render_single_view(mesh, pose)
-                return self._compute_similarity(reference_image, rendered)
+                return compute_image_similarity_torch(reference_image, rendered)
             
             return self.optimizer.gradient_descent(objective, initial_pose)
-    
-    def _compute_similarity(self, img1: torch.Tensor, img2) -> float:
-        """计算图像相似度 - 使用纯PyTorch版本避免numpy转换"""
-        from .utils import compute_image_similarity_torch
-        
-        # 统一转换为torch.Tensor
-        if not isinstance(img1, torch.Tensor):
-            img1 = torch.from_numpy(img1).float()
-        
-        if not isinstance(img2, torch.Tensor):
-            import numpy as np
-            img2 = torch.from_numpy(np.array(img2)).float()
-        
-        return compute_image_similarity_torch(img1, img2) 
 
     def _tensor_to_numpy(self, tensor: torch.Tensor) -> np.ndarray:
         """将torch.Tensor转换为numpy数组供可视化使用"""

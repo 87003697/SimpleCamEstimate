@@ -26,7 +26,7 @@ from .core import (
 )
 
 from .optimizer import OptimizerManager
-from .utils import preprocess_image, compute_image_similarity, cleanup_gpu_memory
+from .utils import preprocess_image, compute_image_similarity_torch, compute_batch_similarity_torch, cleanup_gpu_memory
 from .visualization import V2M4Visualizer
 from .dust3r_helper import DUSt3RHelper, DUSt3RResult
 
@@ -128,7 +128,8 @@ __all__ = [
     
     # 工具函数
     "preprocess_image",
-    "compute_image_similarity", 
+    "compute_image_similarity_torch",
+    "compute_batch_similarity_torch",
     "cleanup_gpu_memory",
     "validate_data_integrity",
     "create_visualization_summary",
